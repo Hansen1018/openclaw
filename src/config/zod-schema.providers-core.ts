@@ -1,6 +1,5 @@
 // Defines core provider schema fragments for config parsing.
 import { isValidInboundPathRootPattern } from "@openclaw/media-core/inbound-path-policy";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
@@ -50,7 +49,10 @@ import {
   validateTelegramWebhookSecretRequirements,
 } from "./zod-schema.secret-input-validation.js";
 import { sensitive } from "./zod-schema.sensitive.js";
-import { SignalTransportSchema } from "./zod-schema.signal.js";
+import {
+  projectSignalConfigForUpdateValidation,
+  SignalTransportSchema,
+} from "./zod-schema.signal.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
@@ -1256,49 +1258,11 @@ function validateSignalConfigAllowFrom(value: SignalConfigValidationValue, ctx: 
 const CanonicalSignalConfigSchema = SignalConfigSchemaBase.superRefine(
   validateSignalConfigAllowFrom,
 );
-const SIGNAL_RETIRED_TRANSPORT_KEYS = [
-  "apiMode",
-  "configPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "cliPath",
-  "autoStart",
-  "startupTimeoutMs",
-  "receiveMode",
-  "ignoreStories",
-] as const;
-
-function omitSignalRetiredTransportKeys(value: unknown): unknown {
-  if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1" || !isRecord(value)) {
-    return value;
-  }
-  const next = { ...value };
-  for (const key of SIGNAL_RETIRED_TRANSPORT_KEYS) {
-    delete next[key];
-  }
-  if (isRecord(value.accounts)) {
-    next.accounts = Object.fromEntries(
-      Object.entries(value.accounts).map(([accountId, account]) => {
-        if (!isRecord(account)) {
-          return [accountId, account];
-        }
-        const nextAccount = { ...account };
-        for (const key of SIGNAL_RETIRED_TRANSPORT_KEYS) {
-          delete nextAccount[key];
-        }
-        return [accountId, nextAccount];
-      }),
-    );
-  }
-  return next;
-}
-
 // Post-core update snapshots retain their authored sourceConfig separately. Strip retired fields
 // only from validation output so the updater can refresh the external owner, then doctor migrates
 // the untouched source before the strict final validation pass.
 export const SignalConfigSchema = z.preprocess(
-  omitSignalRetiredTransportKeys,
+  (value) => projectSignalConfigForUpdateValidation(value),
   CanonicalSignalConfigSchema,
 );
 const IMessageActionSchema = z

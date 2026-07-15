@@ -62,6 +62,11 @@ import {
   isBuiltInModelProviderOverlayId,
 } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
+import {
+  collectSignalTransportUrlIssues,
+  projectSignalConfigForUpdateValidation,
+  restoreSignalUpdateValidationSource,
+} from "./zod-schema.signal.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set([
   "google-antigravity-auth",
@@ -1721,10 +1726,24 @@ function validateConfigObjectWithPluginsBase(
       if (!channelSchema?.schema) {
         continue;
       }
+      const sourceChannelConfig = config.channels[trimmed];
+      // Signal's new owner must be installable before it can migrate shipped flat transport keys.
+      // Validate a bounded projection during update, then restore authored fields for doctor.
+      const validationValue =
+        trimmed === "signal"
+          ? projectSignalConfigForUpdateValidation(sourceChannelConfig, opts.env ?? process.env)
+          : sourceChannelConfig;
+      if (trimmed === "signal") {
+        const signalUrlIssues = collectSignalTransportUrlIssues(validationValue);
+        if (signalUrlIssues.length > 0) {
+          issues.push(...signalUrlIssues);
+          continue;
+        }
+      }
       const result = validateJsonSchemaValue({
         schema: channelSchema.schema,
         cacheKey: `channel:${trimmed}`,
-        value: config.channels[trimmed],
+        value: validationValue,
         applyDefaults: true, // Always apply defaults for AJV schema validation;
         // writeConfigFile persists persistCandidate, not validated.config (#61841)
       });
@@ -1741,7 +1760,16 @@ function validateConfigObjectWithPluginsBase(
         }
         continue;
       }
-      replaceChannelConfig(trimmed, result.value);
+      replaceChannelConfig(
+        trimmed,
+        trimmed === "signal"
+          ? restoreSignalUpdateValidationSource({
+              source: sourceChannelConfig,
+              validated: result.value,
+              env: opts.env ?? process.env,
+            })
+          : result.value,
+      );
     }
   }
 

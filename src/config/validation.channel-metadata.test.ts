@@ -271,6 +271,90 @@ beforeEach(() => {
 });
 
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
+  it("preserves retired Signal transport fields only during update validation", () => {
+    const signal = {
+      account: "+15555550123",
+      apiMode: "container",
+      httpUrl: "http://signal-container:8080",
+      autoStart: false,
+      accounts: {
+        ops: {
+          account: "+15555550124",
+          httpPort: 8181,
+        },
+      },
+    };
+
+    const updateResult = validateConfigObjectWithPlugins(
+      { channels: { signal } },
+      { env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } },
+    );
+
+    expect(updateResult.ok).toBe(true);
+    if (updateResult.ok) {
+      expect(updateResult.config.channels?.signal).toMatchObject(signal);
+    }
+
+    const normalResult = validateConfigObjectWithPlugins(
+      { channels: { signal } },
+      { env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } },
+    );
+    expect(normalResult.ok).toBe(false);
+  });
+
+  it("applies the Signal update projection in raw config-write validation", () => {
+    const signal = {
+      account: "+15555550123",
+      apiMode: "native",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    };
+
+    const result = validateConfigObjectRawWithPlugins(
+      { channels: { signal } },
+      { env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.channels?.signal).toMatchObject(signal);
+    }
+  });
+
+  it.each(["ftp://signal.example:21", "http://user:secret@signal.example:8080", "http://["])(
+    "rejects invalid Signal transport URL %s through channel validation",
+    (url) => {
+      const result = validateConfigObjectWithPlugins({
+        channels: {
+          signal: {
+            account: "+15555550123",
+            transport: { kind: "external-native", url },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues).toContainEqual(
+          expect.objectContaining({ path: "channels.signal.transport.url" }),
+        );
+      }
+    },
+  );
+
+  it("accepts generated Signal HTTPS transport URLs without credentials", () => {
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        signal: {
+          account: "+15555550123",
+          transport: { kind: "external-native", url: "https://signal.example/rpc" },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("applies bundled channel defaults from plugin-owned schema metadata", () => {
     setupTelegramSchemaWithDefault();
 
