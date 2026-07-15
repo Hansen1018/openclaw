@@ -158,6 +158,20 @@ function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> {
   });
 }
 
+async function withNormalConfigValidation<T>(run: () => Promise<T>): Promise<T> {
+  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "0";
+  try {
+    return await run();
+  } finally {
+    if (previousUpdateInProgress === undefined) {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    } else {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
+    }
+  }
+}
+
 export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
   suppressDeprecations();
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
@@ -225,7 +239,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     });
   }
 
-  const pluginUpdate = await withUpdateFinalizationEnv(async () => {
+  let pluginUpdate = await withUpdateFinalizationEnv(async () => {
     await createUpdateConfigSnapshot();
     await doctorCommand(defaultRuntime, {
       nonInteractive: true,
@@ -252,7 +266,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       effectiveChannel ??
       DEFAULT_PACKAGE_CHANNEL;
     const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-    return await updatePluginsAfterCoreUpdate({
+    const updateResult = await updatePluginsAfterCoreUpdate({
       root,
       channel: postDoctorChannel,
       configSnapshot,
@@ -268,7 +282,41 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
       pluginInstallRecords,
     });
+    if (updateResult.status === "error" || !updateResult.changed) {
+      return updateResult;
+    }
+
+    // External plugin updates can install the doctor owner needed to migrate a shipped config.
+    // Run repair again before restart so the temporary update-only validation window never leaks
+    // legacy channel state into normal runtime.
+    await doctorCommand(defaultRuntime, {
+      nonInteractive: true,
+      repair: true,
+      yes: opts.yes === true,
+      crossStateDirImports: false,
+    });
+    return updateResult;
   });
+
+  // Re-parse outside the update-only schema window. A plugin migration that did not converge must
+  // fail finalization instead of letting legacy config reach the restarted gateway.
+  configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());
+  if (pluginUpdate.status !== "error" && !configSnapshot.valid) {
+    pluginUpdate = {
+      ...pluginUpdate,
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+      warnings: [
+        ...(pluginUpdate.warnings ?? []),
+        {
+          reason: "Config remained invalid after updated plugin migrations.",
+          message:
+            "Post-update plugin migration did not produce a valid config; refusing to restart.",
+          guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
+        },
+      ],
+    };
+  }
 
   const result: UpdateFinalizeResult = {
     status:

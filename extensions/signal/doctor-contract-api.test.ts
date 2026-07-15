@@ -552,6 +552,28 @@ describe("signal transport compatibility", () => {
     ]);
   });
 
+  it("ignores a retired bind port when an explicit container URL owns the endpoint", async () => {
+    const result = await migrateLegacySignalTransportConfig({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            apiMode: "container",
+            httpUrl: "http://signal-container:8080",
+            httpPort: 70_000,
+          },
+        },
+      } as never,
+    });
+
+    expect(result.warnings).toBeUndefined();
+    expect(result.config.channels?.signal?.transport).toEqual({
+      kind: "container",
+      url: "http://signal-container:8080",
+    });
+    expect(result.config.channels?.signal).not.toHaveProperty("httpPort");
+  });
+
   it("keeps canonical transport authoritative over retired malformed URLs", async () => {
     const result = await migrateLegacySignalTransportConfig({
       cfg: signalConfig({

@@ -140,14 +140,15 @@ function hasInvalidLegacyHttpUrl(
   });
 }
 
-function hasInvalidLegacyHttpPort(
-  entries: Record<string, unknown>[],
-  parent: Record<string, unknown>,
+function hasInvalidManagedTransportPort(
+  transports: Array<SignalTransportConfig | undefined>,
 ): boolean {
-  return entries.some((entry) => {
-    const httpPort = inherited(entry, parent, "httpPort");
-    return httpPort !== undefined && !isValidSignalManagedNativePort(httpPort);
-  });
+  return transports.some(
+    (transport) =>
+      transport?.kind === "managed-native" &&
+      transport.httpPort !== undefined &&
+      !isValidSignalManagedNativePort(transport.httpPort),
+  );
 }
 
 function requiresDetection(
@@ -503,13 +504,6 @@ export async function migrateLegacySignalTransportConfig(params: {
       warnings: [PENDING_LEGACY_INVALID_URL_WARNING],
     };
   }
-  if (hasInvalidLegacyHttpPort(legacyResolutionEntries, signal)) {
-    return {
-      config: params.cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_INVALID_PORT_WARNING],
-    };
-  }
   if (
     !params.detect &&
     legacyResolutionEntries.some((entry) => requiresDetection(entry, signal, apiMode))
@@ -520,15 +514,23 @@ export async function migrateLegacySignalTransportConfig(params: {
       warnings: [PENDING_LEGACY_TRANSPORT_WARNING],
     };
   }
+  const resolvedTransports = await Promise.all(
+    entries.map((entry, index) =>
+      !shouldMaterializeTransport(entries, index)
+        ? undefined
+        : resolveLegacyTransport({ entry, parent: signal, apiMode, detect: params.detect }),
+    ),
+  );
+  if (hasInvalidManagedTransportPort(resolvedTransports)) {
+    return {
+      config: params.cfg,
+      changes: [],
+      warnings: [PENDING_LEGACY_INVALID_PORT_WARNING],
+    };
+  }
   const transports = allocateMigratedManagedPorts({
     entries,
-    transports: await Promise.all(
-      entries.map((entry, index) =>
-        !shouldMaterializeTransport(entries, index)
-          ? undefined
-          : resolveLegacyTransport({ entry, parent: signal, apiMode, detect: params.detect }),
-      ),
-    ),
+    transports: resolvedTransports,
   });
   if (
     transports.some((transport, index) => shouldMaterializeTransport(entries, index) && !transport)
@@ -579,23 +581,14 @@ export function migrateLegacySignalTransportConfigSync(
       warnings: [PENDING_LEGACY_INVALID_URL_WARNING],
     };
   }
-  if (hasInvalidLegacyHttpPort(legacyResolutionEntries, signal)) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_INVALID_PORT_WARNING],
-    };
-  }
   const selectedAccountId = options?.ambiguousTransportSelection
     ? normalizeAccountId(options.ambiguousTransportSelection.accountId)
     : undefined;
   const selectedEntryIndex = selectedAccountId
-    ? entries.findIndex(
-        (_, index) => {
-          const entryAccountId = signalAccountIdForEntry(entries, index);
-          return Boolean(entryAccountId && normalizeAccountId(entryAccountId) === selectedAccountId);
-        },
-      )
+    ? entries.findIndex((_, index) => {
+        const entryAccountId = signalAccountIdForEntry(entries, index);
+        return Boolean(entryAccountId && normalizeAccountId(entryAccountId) === selectedAccountId);
+      })
     : -1;
   const selectedUrl = options?.ambiguousTransportSelection
     ? normalizeSignalTransportUrl(
@@ -605,27 +598,35 @@ export function migrateLegacySignalTransportConfigSync(
             : legacyBaseUrl(signal, signal)),
       )
     : undefined;
+  const resolvedTransports = entries.map((entry, index) => {
+    if (!shouldMaterializeTransport(entries, index)) {
+      return undefined;
+    }
+    const accountId = signalAccountIdForEntry(entries, index);
+    const entryUrl = legacyBaseUrl(entry, signal);
+    const selectedKind =
+      options?.ambiguousTransportSelection &&
+      ((accountId && normalizeAccountId(accountId) === selectedAccountId) ||
+        (selectedUrl !== undefined && entryUrl === selectedUrl))
+        ? options.ambiguousTransportSelection.kind
+        : undefined;
+    return resolveLegacyTransportWithoutDetection({
+      entry,
+      parent: signal,
+      apiMode: signal.apiMode,
+      ...(selectedKind ? { ambiguousTransportKind: selectedKind } : {}),
+    });
+  });
+  if (hasInvalidManagedTransportPort(resolvedTransports)) {
+    return {
+      config: cfg,
+      changes: [],
+      warnings: [PENDING_LEGACY_INVALID_PORT_WARNING],
+    };
+  }
   const transports = allocateMigratedManagedPorts({
     entries,
-    transports: entries.map((entry, index) => {
-      if (!shouldMaterializeTransport(entries, index)) {
-        return undefined;
-      }
-      const accountId = signalAccountIdForEntry(entries, index);
-      const entryUrl = legacyBaseUrl(entry, signal);
-      const selectedKind =
-        options?.ambiguousTransportSelection &&
-        ((accountId && normalizeAccountId(accountId) === selectedAccountId) ||
-          (selectedUrl !== undefined && entryUrl === selectedUrl))
-          ? options.ambiguousTransportSelection.kind
-          : undefined;
-      return resolveLegacyTransportWithoutDetection({
-        entry,
-        parent: signal,
-        apiMode: signal.apiMode,
-        ...(selectedKind ? { ambiguousTransportKind: selectedKind } : {}),
-      });
-    }),
+    transports: resolvedTransports,
   });
   if (
     transports.some((transport, index) => shouldMaterializeTransport(entries, index) && !transport)

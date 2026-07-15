@@ -7478,6 +7478,37 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("updateFinalizeCommand rejects config that remains invalid after plugin repair", async () => {
+    let finalValidationEnv: string | undefined;
+    const invalidSnapshot = {
+      ...baseSnapshot,
+      valid: false,
+      issues: [{ path: "channels.signal.httpUrl", message: "legacy Signal transport field" }],
+    } as ConfigFileSnapshot;
+    vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce(baseSnapshot)
+      .mockResolvedValueOnce(baseSnapshot)
+      .mockImplementationOnce(async () => {
+        finalValidationEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+        return invalidSnapshot;
+      });
+
+    await updateFinalizeCommand({ json: true, restart: false });
+
+    expect(finalValidationEnv).toBe("0");
+    expect(vi.mocked(readConfigFileSnapshot).mock.calls.at(-1)?.[0]).toBeUndefined();
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      postUpdate: {
+        plugins: {
+          status: "error",
+          reason: "post-plugin-doctor-invalid-config",
+        },
+      },
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("updateFinalizeCommand repairs doctor by default and refreshes plugin state after doctor", async () => {
     const preDoctorConfig = {
       update: { channel: "stable" },
@@ -7511,6 +7542,7 @@ describe("update-cli", () => {
     } satisfies Record<string, PluginInstallRecord>;
     vi.mocked(readConfigFileSnapshot)
       .mockResolvedValueOnce(preDoctorSnapshot)
+      .mockResolvedValueOnce(postDoctorSnapshot)
       .mockResolvedValueOnce(postDoctorSnapshot);
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(postDoctorRecords);
     syncPluginsForUpdateChannel.mockImplementationOnce(
@@ -7535,6 +7567,7 @@ describe("update-cli", () => {
       yes: false,
       crossStateDirImports: false,
     });
+    expect(doctorCommand).toHaveBeenCalledTimes(2);
     expect(syncPluginCall()?.channel).toBe("beta");
     expect(syncPluginCall()?.config).toEqual({
       ...postDoctorConfig,
