@@ -493,20 +493,23 @@ describe("channelsAddCommand", () => {
     const afterAccountConfigWritten = vi.fn(async () => undefined);
     const plugin = createSignalPlugin(afterAccountConfigWritten);
     setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "signal",
-        pluginId: "signal",
-        trustedSourceLinkedOfficialInstall: true,
-        meta: plugin.meta,
-        setupCapabilities: { invalidConfigRecovery: true },
-        install: {
-          npmSpec: "@openclaw/signal",
-          defaultChoice: "npm",
-          allowInvalidConfigRecovery: true,
-        },
+    const catalogEntry: ChannelPluginCatalogEntry = {
+      id: "signal",
+      pluginId: "signal",
+      trustedSourceLinkedOfficialInstall: true,
+      meta: plugin.meta,
+      setupCapabilities: { invalidConfigRecovery: true },
+      install: {
+        npmSpec: "@openclaw/signal",
+        defaultChoice: "npm",
+        allowInvalidConfigRecovery: true,
       },
-    ]);
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(catalogEntry);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]),
+    );
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       valid: false,
@@ -531,6 +534,52 @@ describe("channelsAddCommand", () => {
       enabled: true,
       accounts: { ops: { account: "+15550001" } },
     });
+  });
+
+  it("does not borrow invalid config recovery for a different selected setup owner", async () => {
+    const config = {
+      channels: { signal: { mode: "native" } },
+      plugins: {
+        enabled: true,
+        allow: ["signal-shadow"],
+        entries: { "signal-shadow": { enabled: true } },
+      },
+    } as OpenClawConfig;
+    const officialPlugin = createSignalPlugin();
+    const officialEntry: ChannelPluginCatalogEntry = {
+      id: "signal",
+      pluginId: "signal",
+      trustedSourceLinkedOfficialInstall: true,
+      meta: officialPlugin.meta,
+      setupCapabilities: { invalidConfigRecovery: true },
+      install: { npmSpec: "@openclaw/signal", defaultChoice: "npm" },
+    };
+    const shadowEntry: ChannelPluginCatalogEntry = {
+      id: "signal",
+      pluginId: "signal-shadow",
+      origin: "config",
+      meta: officialPlugin.meta,
+      install: { npmSpec: "signal-shadow", defaultChoice: "npm" },
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([officialEntry]);
+    catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(shadowEntry);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      valid: false,
+      sourceConfig: config,
+      config,
+      issues: [{ path: "channels.signal.mode", message: "legacy Signal transport" }],
+    });
+
+    await channelsAddCommand(
+      { channel: "signal", account: "ops", signalNumber: "+15550001" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("does not reuse install-only invalid config recovery during channel setup", async () => {
