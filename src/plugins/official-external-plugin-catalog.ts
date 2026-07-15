@@ -78,7 +78,9 @@ type OfficialExternalPluginCatalogManifest = {
     label?: string;
   };
   catalog?: PluginManifestCatalog;
-  channel?: PluginPackageChannel;
+  channel?: PluginPackageChannel & {
+    envVars?: readonly string[];
+  };
   providers?: readonly OfficialExternalProviderCatalogProvider[];
   /**
    * Mirrors the plugin manifest's providerEndpoints so endpoint classification
