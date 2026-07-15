@@ -109,6 +109,10 @@ vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: vi.fn(() => process.cwd()),
 }));
 
+vi.mock("../daemon/gateway-entrypoint.js", () => ({
+  resolveGatewayInstallEntrypoint: vi.fn(async () => "/tmp/openclaw-entry.mjs"),
+}));
+
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: () => {
     if (process.env.OPENCLAW_NIX_MODE === "1") {
@@ -7567,7 +7571,26 @@ describe("update-cli", () => {
       yes: false,
       crossStateDirImports: false,
     });
-    expect(doctorCommand).toHaveBeenCalledTimes(2);
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const freshDoctorCall = vi
+      .mocked(runExec)
+      .mock.calls.find(([, args]) => args.includes("doctor"));
+    expect(freshDoctorCall?.[1]).toEqual([
+      "/tmp/openclaw-entry.mjs",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+      "--no-workspace-suggestions",
+    ]);
+    expect(freshDoctorCall?.[2]).toMatchObject({
+      cwd: process.cwd(),
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      },
+    });
     expect(syncPluginCall()?.channel).toBe("beta");
     expect(syncPluginCall()?.config).toEqual({
       ...postDoctorConfig,

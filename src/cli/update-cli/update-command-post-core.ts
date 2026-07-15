@@ -70,6 +70,7 @@ import {
   restoreDroppedPreUpdateChannels,
   writePostCoreSourceConfigFile,
 } from "./update-command-config.js";
+import { runPostPluginDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -286,14 +287,13 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       return updateResult;
     }
 
-    // External plugin updates can install the doctor owner needed to migrate a shipped config.
-    // Run repair again before restart so the temporary update-only validation window never leaks
-    // legacy channel state into normal runtime.
-    await doctorCommand(defaultRuntime, {
-      nonInteractive: true,
-      repair: true,
+    // The first doctor may have loaded the pre-update plugin module. A fresh process guarantees
+    // the second pass executes the newly installed owner before normal validation resumes.
+    await runPostPluginDoctorInFreshProcess({
+      root,
       yes: opts.yes === true,
-      crossStateDirImports: false,
+      json: opts.json === true,
+      timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
     });
     return updateResult;
   });
