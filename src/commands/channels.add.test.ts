@@ -536,6 +536,73 @@ describe("channelsAddCommand", () => {
     });
   });
 
+  it("rejects a recovery result that leaves the selected channel invalid", async () => {
+    const config = {
+      channels: {
+        signal: {
+          apiMode: "native",
+          allowFrom: "invalid",
+        },
+      },
+    } as OpenClawConfig;
+    const onAccountConfigChanged = vi.fn(async () => undefined);
+    const plugin = {
+      ...createSignalPlugin(undefined, {
+        applyAccountConfig: ({ cfg, accountId, input }: ApplyAccountConfigParams) => ({
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            signal: {
+              enabled: true,
+              allowFrom: "invalid" as never,
+              transport: { kind: "managed-native" },
+              accounts: {
+                [accountId]: { account: input.signalNumber },
+              },
+            },
+          },
+        }),
+      }),
+      lifecycle: { onAccountConfigChanged },
+    } as ChannelPlugin;
+    const catalogEntry: ChannelPluginCatalogEntry = {
+      id: "signal",
+      pluginId: "signal",
+      trustedSourceLinkedOfficialInstall: true,
+      meta: plugin.meta,
+      setupCapabilities: { invalidConfigRecovery: true },
+      install: { npmSpec: "@openclaw/signal", defaultChoice: "npm" },
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(catalogEntry);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      valid: false,
+      sourceConfig: config,
+      config,
+      issues: [
+        { path: "channels.signal.apiMode", message: "legacy Signal transport" },
+        { path: "channels.signal.allowFrom", message: "expected array" },
+      ],
+    });
+
+    await channelsAddCommand(
+      { channel: "signal", account: "ops", signalNumber: "+15550001" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("channels.signal.allowFrom"),
+    );
+    expect(onAccountConfigChanged).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("does not borrow invalid config recovery for a different selected setup owner", async () => {
     const config = {
       channels: { signal: { mode: "native" } },

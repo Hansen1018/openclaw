@@ -357,15 +357,18 @@ export const signalSetupAdapter: ChannelSetupAdapter = {
     const accountId = normalizeAccountId(params.accountId);
     // An explicit protocol choice may recover the selected endpoint and siblings that inherit
     // that same endpoint. Never guess the protocol for unrelated account endpoints.
-    const recovery = params.input.signalTransport
-      ? migrateLegacySignalTransportConfigSync(params.cfg, {
-          ambiguousTransportSelection: {
-            accountId,
-            kind: params.input.signalTransport,
-            ...(params.input.httpUrl ? { url: params.input.httpUrl } : {}),
-          },
-        })
-      : { config: params.cfg, changes: [] };
+    const recovery = migrateLegacySignalTransportConfigSync(
+      params.cfg,
+      params.input.signalTransport
+        ? {
+            ambiguousTransportSelection: {
+              accountId,
+              kind: params.input.signalTransport,
+              ...(params.input.httpUrl ? { url: params.input.httpUrl } : {}),
+            },
+          }
+        : undefined,
+    );
     if (recovery.warnings?.length) {
       throw new Error(
         "Signal has other ambiguous legacy account endpoints. Resolve each endpoint explicitly or bring them online and run openclaw doctor --fix.",

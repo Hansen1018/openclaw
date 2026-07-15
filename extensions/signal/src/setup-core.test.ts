@@ -129,6 +129,50 @@ describe("signalSetupAdapter", () => {
     expect(next?.channels?.signal?.accounts?.default).not.toHaveProperty("transport");
   });
 
+  it("migrates and preserves an explicit legacy transport during an account-only update", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550124",
+            apiMode: "container",
+            httpUrl: "http://signal-container:8080",
+          },
+        },
+      } as never,
+      accountId: "default",
+      input: { signalNumber: "+15555550125" },
+    });
+
+    expect(next?.channels?.signal?.account).toBe("+15555550125");
+    expect(next?.channels?.signal?.transport).toEqual({
+      kind: "container",
+      url: "http://signal-container:8080",
+    });
+    expect(next?.channels?.signal).not.toHaveProperty("apiMode");
+    expect(next?.channels?.signal).not.toHaveProperty("httpUrl");
+  });
+
+  it("refuses an ambiguous legacy transport during an account-only update", () => {
+    expect(() =>
+      signalSetupAdapter.applyAccountConfig?.({
+        cfg: {
+          channels: {
+            signal: {
+              account: "+15555550124",
+              apiMode: "auto",
+              httpUrl: "http://offline:8080",
+            },
+          },
+        } as never,
+        accountId: "default",
+        input: { signalNumber: "+15555550125" },
+      }),
+    ).toThrow(
+      "Signal has other ambiguous legacy account endpoints. Resolve each endpoint explicitly or bring them online and run openclaw doctor --fix.",
+    );
+  });
+
   it("stores an explicitly selected container endpoint", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {},

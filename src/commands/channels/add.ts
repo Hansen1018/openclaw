@@ -14,6 +14,7 @@ import {
   formatUnsupportedChannelActionMessage,
 } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { validateConfigObjectRawWithPlugins } from "../../config/validation.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
@@ -370,6 +371,16 @@ async function channelsAddCommandImpl(
     input,
     plugin,
   });
+  if (recoveringInvalidConfig) {
+    const recoveredValidation = validateConfigObjectRawWithPlugins(nextConfig);
+    if (!recoveredValidation.ok) {
+      rejectInvalidConfigFileSnapshot(runtime, {
+        ...configSnapshot,
+        issues: recoveredValidation.issues,
+      });
+      return;
+    }
+  }
   if (plugin.lifecycle?.onAccountConfigChanged) {
     await params?.beforePersistentEffect?.();
     await plugin.lifecycle.onAccountConfigChanged({
