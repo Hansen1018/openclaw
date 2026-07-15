@@ -321,9 +321,21 @@ function signalAccountIdForEntry(
   return signalAccountIds(entries)[index - 1];
 }
 
+function nestedDefaultOwnsEffectiveTransport(entries: Record<string, unknown>[]): boolean {
+  const accounts = isRecord(entries[0]?.accounts) ? entries[0].accounts : {};
+  const nestedDefault = accounts[DEFAULT_ACCOUNT_ID];
+  return Boolean(
+    isRecord(nestedDefault) &&
+    (isSignalTransportConfig(nestedDefault.transport) || hasLegacyFields(nestedDefault)),
+  );
+}
+
 function isDiscardedTransportEntry(entries: Record<string, unknown>[], index: number): boolean {
   if (index === 0) {
-    return !hasRootSignalAccount(entries);
+    // Shipped account merging let accounts.default override root transport fields. Materialize
+    // that effective merged entry once; probing the shadowed root can block an otherwise valid
+    // migration when its retired endpoint is offline.
+    return !hasRootSignalAccount(entries) || nestedDefaultOwnsEffectiveTransport(entries);
   }
   // A canonical root transport owns the default account; a nested default's
   // retired endpoint fields are cleanup-only and must not block migration.

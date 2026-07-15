@@ -179,6 +179,58 @@ describe("signal transport compatibility", () => {
     expect(result.config.channels?.signal?.accounts?.default).not.toHaveProperty("transport");
   });
 
+  it("uses a shipped accounts.default endpoint override during sync migration", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        account: "+15555550123",
+        httpUrl: "http://shadowed-root:8080",
+        autoStart: false,
+        accounts: {
+          default: {
+            httpUrl: "http://active-default:8181",
+          },
+        },
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toEqual({
+      kind: "external-native",
+      url: "http://active-default:8181",
+    });
+    expect(result.config.channels?.signal?.accounts?.default).not.toHaveProperty("transport");
+  });
+
+  it("does not probe a shadowed root endpoint during async migration", async () => {
+    const detect = vi.fn(async ({ url }: { url: string }) => ({
+      kind: "external-native" as const,
+      url,
+    }));
+    const result = await migrateLegacySignalTransportConfig({
+      cfg: signalConfig({
+        apiMode: "auto",
+        account: "+15555550123",
+        httpUrl: "http://shadowed-root:8080",
+        accounts: {
+          default: {
+            httpUrl: "http://active-default:8181",
+          },
+        },
+      }),
+      detect,
+    });
+
+    expect(detect).toHaveBeenCalledTimes(1);
+    expect(detect).toHaveBeenCalledWith({
+      url: "http://active-default:8181",
+      account: "+15555550123",
+    });
+    expect(result.config.channels?.signal?.transport).toEqual({
+      kind: "external-native",
+      url: "http://active-default:8181",
+    });
+  });
+
   it("preserves the root managed port when accounts.default inherits it", () => {
     const result = normalizeCompatibilityConfig({
       cfg: signalConfig({
