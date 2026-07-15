@@ -47,7 +47,7 @@ export type ResolvedSignalAccount = {
 
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal", {
   implicitDefaultAccount: {
-    channelKeys: ["account", "accountUuid", "transport"],
+    channelKeys: ["account", "transport"],
   },
 });
 export const listSignalAccountIds = listAccountIds;
@@ -80,11 +80,7 @@ function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): Signa
 }
 
 function isSignalAccountConfigured(config: SignalAccountConfig): boolean {
-  return Boolean(
-    normalizeOptionalString(config.account) ||
-    normalizeOptionalString(config.accountUuid) ||
-    config.transport,
-  );
+  return Boolean(normalizeOptionalString(config.account) || config.transport);
 }
 
 function resolveSignalManagedNativePort(params: {

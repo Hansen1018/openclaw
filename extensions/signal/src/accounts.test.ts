@@ -268,7 +268,7 @@ describe("resolveSignalAccount", () => {
     expect(resolveSignalAccount({ cfg }).config.account).toBe("+15555550123");
   });
 
-  it("discovers an accountUuid-only default account alongside named accounts", () => {
+  it("does not treat accountUuid as an implicit configured default account", () => {
     const cfg = {
       channels: {
         signal: {
@@ -280,8 +280,22 @@ describe("resolveSignalAccount", () => {
       },
     } as never;
 
-    expect(listSignalAccountIds(cfg)).toEqual(["default", "work"]);
-    expect(resolveSignalAccount({ cfg }).configured).toBe(true);
+    expect(listSignalAccountIds(cfg)).toEqual(["work"]);
+    expect(resolveSignalAccount({ cfg, accountId: "default" }).configured).toBe(false);
+    expect(resolveSignalAccount({ cfg }).accountId).toBe("work");
+  });
+
+  it("keeps accountUuid supplemental when no E.164 account or transport exists", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+        },
+      },
+    } as never;
+
+    expect(listSignalAccountIds(cfg)).toEqual(["default"]);
+    expect(resolveSignalAccount({ cfg }).configured).toBe(false);
   });
 
   it("uses configured defaultAccount when accountId is omitted", () => {
