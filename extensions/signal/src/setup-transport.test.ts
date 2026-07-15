@@ -401,6 +401,19 @@ describe("writeSignalAccountTransport", () => {
     ).toThrow("Signal transport URL unsupported protocol: ftp:");
   });
 
+  it.each(["http:/localhost:8080", "http:localhost:8080", "http:///localhost:8080"])(
+    "rejects malformed HTTP endpoint %s",
+    (url) => {
+      expect(() =>
+        writeSignalAccountTransport({
+          cfg: {},
+          accountId: "default",
+          transport: { kind: "external-native", url },
+        }),
+      ).toThrow("Signal transport URL has a malformed HTTP scheme");
+    },
+  );
+
   it("writes the implicit default account without changing named accounts", () => {
     const next = writeSignalAccountTransport({
       cfg: {

@@ -205,6 +205,34 @@ describe("signalSetupAdapter", () => {
     });
   });
 
+  it("refuses to apply one account's explicit protocol to a different sibling endpoint", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          apiMode: "auto",
+          accounts: {
+            work: { account: "+15555550124", httpUrl: "http://work-native:8080" },
+            personal: { account: "+15555550125", httpUrl: "http://personal-container:8080" },
+          },
+        },
+      },
+    } as never;
+
+    expect(() =>
+      signalSetupAdapter.applyAccountConfig?.({
+        cfg,
+        accountId: "work",
+        input: {
+          httpUrl: "http://work-native:8080",
+          signalTransport: "external-native",
+        },
+      }),
+    ).toThrow(
+      "Signal has other ambiguous legacy account endpoints. Resolve each endpoint explicitly or bring them online and run openclaw doctor --fix.",
+    );
+    expect(cfg.channels.signal.accounts.personal.httpUrl).toBe("http://personal-container:8080");
+  });
+
   it("detects and persists an omitted HTTP transport kind", async () => {
     const input = await prepareSignalSetupInput({
       input: {

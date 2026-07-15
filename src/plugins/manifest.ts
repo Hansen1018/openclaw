@@ -1962,6 +1962,9 @@ export type PluginPackageChannel = {
     exportName?: string;
   };
   doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
+  setupCapabilities?: {
+    invalidConfigRecovery?: boolean;
+  };
   cliAddOptions?: readonly PluginPackageChannelCliOption[];
 };
 

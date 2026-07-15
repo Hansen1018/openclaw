@@ -53,6 +53,7 @@ export type ChannelPluginCatalogEntry = {
   origin?: PluginOrigin;
   trustedSourceLinkedOfficialInstall?: boolean;
   meta: ChannelMeta;
+  setupCapabilities?: PluginPackageChannel["setupCapabilities"];
   install: ChannelPluginCatalogInstall;
   installSource?: PluginInstallSourceInfo;
 };
@@ -399,6 +400,9 @@ function buildCatalogEntryFromManifest(params: {
       ? { trustedSourceLinkedOfficialInstall: true }
       : {}),
     meta,
+    ...(params.channel.setupCapabilities
+      ? { setupCapabilities: params.channel.setupCapabilities }
+      : {}),
     install,
     installSource: describePluginInstallSource(install, {
       expectedPackageName: params.packageName,

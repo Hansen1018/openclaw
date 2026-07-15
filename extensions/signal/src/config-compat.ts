@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 // Signal compatibility migration moves shipped flat transport config into account ownership.
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -38,6 +38,12 @@ type DetectTransport = (params: {
 }) => Promise<SignalTransportConfig>;
 
 type ExplicitSignalTransportKind = Exclude<SignalTransportConfig["kind"], "managed-native">;
+
+type ExplicitSignalTransportSelection = {
+  accountId: string;
+  kind: ExplicitSignalTransportKind;
+  url?: string;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -304,6 +310,16 @@ function signalAccountIds(entries: Record<string, unknown>[]): string[] {
     .map(([accountId]) => accountId);
 }
 
+function signalAccountIdForEntry(
+  entries: Record<string, unknown>[],
+  index: number,
+): string | undefined {
+  if (index === 0) {
+    return hasRootSignalAccount(entries) ? DEFAULT_ACCOUNT_ID : undefined;
+  }
+  return signalAccountIds(entries)[index - 1];
+}
+
 function isDiscardedTransportEntry(entries: Record<string, unknown>[], index: number): boolean {
   if (index === 0) {
     return !hasRootSignalAccount(entries);
@@ -537,7 +553,7 @@ export async function migrateLegacySignalTransportConfig(params: {
 
 export function migrateLegacySignalTransportConfigSync(
   cfg: OpenClawConfig,
-  options?: { ambiguousTransportKind?: ExplicitSignalTransportKind },
+  options?: { ambiguousTransportSelection?: ExplicitSignalTransportSelection },
 ): ChannelDoctorConfigMutation {
   const signal = cfg.channels?.signal as unknown;
   if (!isRecord(signal)) {
@@ -570,25 +586,51 @@ export function migrateLegacySignalTransportConfigSync(
       warnings: [PENDING_LEGACY_INVALID_PORT_WARNING],
     };
   }
+  const selectedAccountId = options?.ambiguousTransportSelection
+    ? normalizeAccountId(options.ambiguousTransportSelection.accountId)
+    : undefined;
+  const selectedEntryIndex = selectedAccountId
+    ? entries.findIndex(
+        (_, index) => {
+          const entryAccountId = signalAccountIdForEntry(entries, index);
+          return Boolean(entryAccountId && normalizeAccountId(entryAccountId) === selectedAccountId);
+        },
+      )
+    : -1;
+  const selectedUrl = options?.ambiguousTransportSelection
+    ? normalizeSignalTransportUrl(
+        options.ambiguousTransportSelection.url ??
+          (selectedEntryIndex >= 0
+            ? legacyBaseUrl(entries[selectedEntryIndex], signal)
+            : legacyBaseUrl(signal, signal)),
+      )
+    : undefined;
   const transports = allocateMigratedManagedPorts({
     entries,
-    transports: entries.map((entry, index) =>
-      !shouldMaterializeTransport(entries, index)
-        ? undefined
-        : resolveLegacyTransportWithoutDetection({
-            entry,
-            parent: signal,
-            apiMode: signal.apiMode,
-            ...(options?.ambiguousTransportKind
-              ? { ambiguousTransportKind: options.ambiguousTransportKind }
-              : {}),
-          }),
-    ),
+    transports: entries.map((entry, index) => {
+      if (!shouldMaterializeTransport(entries, index)) {
+        return undefined;
+      }
+      const accountId = signalAccountIdForEntry(entries, index);
+      const entryUrl = legacyBaseUrl(entry, signal);
+      const selectedKind =
+        options?.ambiguousTransportSelection &&
+        ((accountId && normalizeAccountId(accountId) === selectedAccountId) ||
+          (selectedUrl !== undefined && entryUrl === selectedUrl))
+          ? options.ambiguousTransportSelection.kind
+          : undefined;
+      return resolveLegacyTransportWithoutDetection({
+        entry,
+        parent: signal,
+        apiMode: signal.apiMode,
+        ...(selectedKind ? { ambiguousTransportKind: selectedKind } : {}),
+      });
+    }),
   });
   if (
     transports.some((transport, index) => shouldMaterializeTransport(entries, index) && !transport)
   ) {
-    return { config: cfg, changes: [] };
+    return { config: cfg, changes: [], warnings: [PENDING_LEGACY_TRANSPORT_WARNING] };
   }
   const next = applyMigratedSignalTransports({ cfg, entries, transports });
   if (!next) {

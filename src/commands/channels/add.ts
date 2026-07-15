@@ -158,12 +158,12 @@ async function channelsAddCommandImpl(
   const recoveryCatalogEntry = useWizard
     ? undefined
     : await resolveCatalogChannelEntry(rawChannel, null, { trustedRecoveryOnly: true });
-  // Invalid config may reach setup only through a trusted owner that opted in,
-  // and requireValidConfigFileSnapshot still confines every issue to that owner.
+  // Invalid config may reach setup only through a trusted owner that explicitly opted its
+  // setup adapter into recovery. Install recovery is a separate, narrower capability.
   const recoveryChannelId =
     (recoveryCatalogEntry?.origin === "bundled" ||
       recoveryCatalogEntry?.trustedSourceLinkedOfficialInstall === true) &&
-    recoveryCatalogEntry.install.allowInvalidConfigRecovery === true
+    recoveryCatalogEntry.setupCapabilities?.invalidConfigRecovery === true
       ? normalizeChannelId(recoveryCatalogEntry.id)
       : undefined;
   const configSnapshot = await requireValidConfigFileSnapshot(

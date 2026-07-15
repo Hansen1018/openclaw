@@ -551,6 +551,9 @@
           "blurb": "signal-cli linked device with extra setup for the local REST bridge.",
           "systemImage": "antenna.radiowaves.left.and.right",
           "markdownCapable": true,
+          "setupCapabilities": {
+            "invalidConfigRecovery": true
+          },
           "cliAddOptions": [
             {
               "flags": "--signal-number <e164>",

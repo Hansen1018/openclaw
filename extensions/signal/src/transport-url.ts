@@ -4,6 +4,9 @@ export function normalizeSignalTransportUrl(value: string): string {
   if (!trimmed) {
     throw new Error("Signal transport URL is required");
   }
+  if (/^https?:/i.test(trimmed) && !/^https?:\/\/[^/]/i.test(trimmed)) {
+    throw new Error("Signal transport URL has a malformed HTTP scheme");
+  }
   const explicitScheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(trimmed)?.[1]?.toLowerCase();
   if (explicitScheme && explicitScheme !== "http" && explicitScheme !== "https") {
     throw new Error(`Signal transport URL unsupported protocol: ${explicitScheme}:`);

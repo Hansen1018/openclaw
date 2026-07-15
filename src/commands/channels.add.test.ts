@@ -499,6 +499,7 @@ describe("channelsAddCommand", () => {
         pluginId: "signal",
         trustedSourceLinkedOfficialInstall: true,
         meta: plugin.meta,
+        setupCapabilities: { invalidConfigRecovery: true },
         install: {
           npmSpec: "@openclaw/signal",
           defaultChoice: "npm",
@@ -530,6 +531,42 @@ describe("channelsAddCommand", () => {
       enabled: true,
       accounts: { ops: { account: "+15550001" } },
     });
+  });
+
+  it("does not reuse install-only invalid config recovery during channel setup", async () => {
+    const config = {
+      channels: { signal: { mode: "native" } },
+    } as OpenClawConfig;
+    const plugin = createSignalPlugin();
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "signal",
+        pluginId: "signal",
+        trustedSourceLinkedOfficialInstall: true,
+        meta: plugin.meta,
+        install: {
+          npmSpec: "@openclaw/signal",
+          defaultChoice: "npm",
+          allowInvalidConfigRecovery: true,
+        },
+      },
+    ]);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      valid: false,
+      sourceConfig: config,
+      config,
+      issues: [{ path: "channels.signal.mode", message: "legacy Signal transport" }],
+    });
+
+    await channelsAddCommand(
+      { channel: "signal", account: "ops", signalNumber: "+15550001" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("preselects an installable catalog channel in guided setup", async () => {
