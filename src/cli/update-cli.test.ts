@@ -109,9 +109,13 @@ vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: vi.fn(() => process.cwd()),
 }));
 
-vi.mock("../daemon/gateway-entrypoint.js", () => ({
-  resolveGatewayInstallEntrypoint: vi.fn(async () => "/tmp/openclaw-entry.mjs"),
-}));
+vi.mock("../daemon/gateway-entrypoint.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/gateway-entrypoint.js")>();
+  return {
+    ...actual,
+    resolveGatewayInstallEntrypoint: vi.fn(actual.resolveGatewayInstallEntrypoint),
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: () => {
@@ -412,6 +416,7 @@ vi.mock("../runtime.js", () => ({
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+const { resolveGatewayInstallEntrypoint } = await import("../daemon/gateway-entrypoint.js");
 const {
   mutateConfigFileWithRetry,
   readConfigFileSnapshot,
@@ -7514,6 +7519,7 @@ describe("update-cli", () => {
   });
 
   it("updateFinalizeCommand repairs doctor by default and refreshes plugin state after doctor", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce("/tmp/openclaw-entry.mjs");
     const preDoctorConfig = {
       update: { channel: "stable" },
       plugins: { entries: { pre: { enabled: true } } },
@@ -7607,6 +7613,7 @@ describe("update-cli", () => {
   });
 
   it("updateFinalizeCommand restores channels from the RPC pre-update config payload", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce("/tmp/openclaw-entry.mjs");
     const tempDir = createCaseDir("openclaw-rpc-finalize");
     const sourceConfigPath = path.join(tempDir, "source-config.json");
     const preUpdateConfig = {

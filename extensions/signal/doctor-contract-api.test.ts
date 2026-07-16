@@ -516,6 +516,29 @@ describe("signal transport compatibility", () => {
     });
   });
 
+  it("keeps a supplemental root UUID from creating a default transport", async () => {
+    const result = await migrateLegacySignalTransportConfig({
+      cfg: signalConfig({
+        accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+        apiMode: "native",
+        autoStart: true,
+        httpPort: 8181,
+        accounts: {
+          work: { account: "+15555550123" },
+        },
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toBeUndefined();
+    expect(result.config.channels?.signal?.accountUuid).toBe(
+      "123e4567-e89b-12d3-a456-426614174000",
+    );
+    expect(result.config.channels?.signal?.accounts?.work?.transport).toEqual({
+      kind: "managed-native",
+      httpPort: 8181,
+    });
+  });
+
   it("keeps explicit native auto-start endpoints managed", async () => {
     const result = await migrateLegacySignalTransportConfig({
       cfg: signalConfig({

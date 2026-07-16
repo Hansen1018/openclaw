@@ -299,7 +299,6 @@ function hasRootSignalAccount(entries: Record<string, unknown>[]): boolean {
   return (
     entries.length === 1 ||
     Boolean(optionalString(root?.account)) ||
-    Boolean(optionalString(root?.accountUuid)) ||
     isSignalTransportConfig(root?.transport)
   );
 }
