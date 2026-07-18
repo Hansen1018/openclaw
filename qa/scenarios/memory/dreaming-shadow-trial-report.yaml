@@ -5,10 +5,10 @@ scenario:
   surface: memory
   coverage:
     primary:
-      - memory.dreaming
+      - session-memory-and-context-engine.memory-files-dreaming
     secondary:
-      - memory.promotion
-      - qa.artifact-safety
+      - session-memory-and-context-engine.memory-files-promotion
+      - session-memory-and-context-engine.memory-files-artifact-safety
   risk: medium
   capabilities:
     - tools.read
