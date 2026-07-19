@@ -21,3 +21,9 @@ export function normalizeSignalTransportUrl(value: string): string {
   const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
   return `${parsed.protocol}//${parsed.host}${pathname}`;
 }
+
+export function buildSignalTransportHttpUrl(host: string, port: number): string {
+  const normalizedHost = host.trim().replace(/^\[|\]$/g, "");
+  const authorityHost = normalizedHost.includes(":") ? `[${normalizedHost}]` : normalizedHost;
+  return normalizeSignalTransportUrl(`http://${authorityHost}:${port}`);
+}

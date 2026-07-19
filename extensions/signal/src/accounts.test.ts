@@ -44,6 +44,29 @@ describe("resolveSignalAccount", () => {
     });
   });
 
+  it("formats an IPv6 managed native bind as a valid connection URL", () => {
+    const resolved = resolveSignalAccount({
+      cfg: {
+        channels: {
+          signal: {
+            transport: {
+              kind: "managed-native",
+              httpHost: "::1",
+              httpPort: 8181,
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(resolved.transport).toMatchObject({
+      kind: "managed-native",
+      baseUrl: "http://[::1]:8181",
+      httpHost: "::1",
+      httpPort: 8181,
+    });
+  });
+
   it("does not reserve a managed transport's own implicit connection endpoint", () => {
     const resolved = resolveSignalAccount({
       cfg: {

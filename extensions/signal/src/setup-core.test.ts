@@ -308,6 +308,72 @@ describe("signalSetupAdapter", () => {
     });
   });
 
+  it("matches canonical endpoint spellings while recovering inherited legacy accounts", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            apiMode: "auto",
+            autoStart: false,
+            httpHost: "LOCALHOST",
+            httpPort: 80,
+            accounts: {
+              work: { account: "+15555550124" },
+              personal: { account: "+15555550125" },
+            },
+          },
+        },
+      } as never,
+      accountId: "work",
+      input: {
+        httpUrl: "http://localhost",
+        signalTransport: "external-native",
+      },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
+      kind: "external-native",
+      url: "http://localhost",
+    });
+    expect(next?.channels?.signal?.accounts?.personal?.transport).toEqual({
+      kind: "external-native",
+      url: "http://localhost",
+    });
+  });
+
+  it("formats inherited IPv6 endpoints while recovering legacy accounts", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            apiMode: "auto",
+            autoStart: false,
+            httpHost: "::1",
+            httpPort: 8080,
+            accounts: {
+              work: { account: "+15555550124" },
+              personal: { account: "+15555550125" },
+            },
+          },
+        },
+      } as never,
+      accountId: "work",
+      input: {
+        httpUrl: "http://[::1]:8080",
+        signalTransport: "external-native",
+      },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
+      kind: "external-native",
+      url: "http://[::1]:8080",
+    });
+    expect(next?.channels?.signal?.accounts?.personal?.transport).toEqual({
+      kind: "external-native",
+      url: "http://[::1]:8080",
+    });
+  });
+
   it("refuses to apply one account's explicit protocol to a different sibling endpoint", () => {
     const cfg = {
       channels: {

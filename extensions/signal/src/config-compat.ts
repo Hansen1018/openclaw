@@ -11,7 +11,7 @@ import {
   isValidSignalManagedNativePort,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
-import { normalizeSignalTransportUrl } from "./transport-url.js";
+import { buildSignalTransportHttpUrl, normalizeSignalTransportUrl } from "./transport-url.js";
 
 const LEGACY_TRANSPORT_FIELDS = [
   "configPath",
@@ -100,7 +100,9 @@ function legacyBaseUrl(entry: Record<string, unknown>, parent: Record<string, un
   const host = optionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
   const rawPort = inherited(entry, parent, "httpPort");
   const port = typeof rawPort === "number" ? rawPort : 8080;
-  return `http://${host}:${port}`;
+  return isValidSignalManagedNativePort(port)
+    ? buildSignalTransportHttpUrl(host, port)
+    : `http://${host}:${port}`;
 }
 
 function hasLegacyFields(entry: Record<string, unknown>): boolean {
