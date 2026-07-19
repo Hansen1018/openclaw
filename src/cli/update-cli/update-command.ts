@@ -1345,7 +1345,7 @@ async function updateCommandInternal(
       process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
     }
     try {
-      postCorePluginUpdate = await updatePluginsAfterCoreUpdate({
+      const initialPluginUpdate = await updatePluginsAfterCoreUpdate({
         root: postUpdateRoot,
         channel,
         configSnapshot: postUpdateConfigSnapshot,
@@ -1355,6 +1355,19 @@ async function updateCommandInternal(
         timeoutMs: updateStepTimeoutMs,
         pluginInstallRecords: preUpdatePluginInstallRecords,
       });
+      const completedPluginUpdate = await completePostCorePluginUpdate({
+        root: postUpdateRoot,
+        pluginUpdate: initialPluginUpdate,
+        // A plugin-only update can replace its migration owner without changing the core install.
+        // Reload that owner before the current process reports success or restarts the gateway.
+        freshDoctorRequired:
+          initialPluginUpdate.sync?.changed === true || initialPluginUpdate.npm?.changed === true,
+        yes: opts.yes === true,
+        json: opts.json === true,
+        timeoutMs: updateStepTimeoutMs,
+      });
+      postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
+      postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
     } finally {
       if (compatibilityDowngradeTarget) {
         if (previousCompatibilityHostVersion === undefined) {

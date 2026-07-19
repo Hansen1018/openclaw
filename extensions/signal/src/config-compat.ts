@@ -608,13 +608,6 @@ export function migrateLegacySignalTransportConfigSync(
   const legacyResolutionEntries = migrationEntries.filter(
     (entry) => !isSignalTransportConfig(entry.transport),
   );
-  if (hasInvalidLegacyHttpUrl(legacyResolutionEntries, signal)) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_INVALID_URL_WARNING],
-    };
-  }
   const selectedAccountId = options?.ambiguousTransportSelection
     ? normalizeAccountId(options.ambiguousTransportSelection.accountId)
     : undefined;
@@ -624,26 +617,46 @@ export function migrateLegacySignalTransportConfigSync(
         return Boolean(entryAccountId && normalizeAccountId(entryAccountId) === selectedAccountId);
       })
     : -1;
-  const selectedUrl = options?.ambiguousTransportSelection
-    ? normalizeSignalTransportUrl(
-        options.ambiguousTransportSelection.url ??
-          (selectedEntryIndex >= 0
-            ? legacyBaseUrl(entries[selectedEntryIndex], signal)
-            : legacyBaseUrl(signal, signal)),
-      )
+  const selectedUrl = options?.ambiguousTransportSelection?.url
+    ? normalizeSignalTransportUrl(options.ambiguousTransportSelection.url)
     : undefined;
+  if (
+    hasInvalidLegacyHttpUrl(
+      legacyResolutionEntries.filter(
+        (entry) => !selectedUrl || entry !== entries[selectedEntryIndex],
+      ),
+      signal,
+    )
+  ) {
+    return {
+      config: cfg,
+      changes: [],
+      warnings: [PENDING_LEGACY_INVALID_URL_WARNING],
+    };
+  }
   const resolvedTransports = entries.map((entry, index) => {
     if (!shouldMaterializeTransport(entries, index)) {
       return undefined;
     }
     const accountId = signalAccountIdForEntry(entries, index);
-    const entryUrl = legacyBaseUrl(entry, signal);
+    const entryUrl = (() => {
+      try {
+        return legacyBaseUrl(entry, signal);
+      } catch {
+        return undefined;
+      }
+    })();
     const selectedKind =
       options?.ambiguousTransportSelection &&
       ((accountId && normalizeAccountId(accountId) === selectedAccountId) ||
         (selectedUrl !== undefined && entryUrl === selectedUrl))
         ? options.ambiguousTransportSelection.kind
         : undefined;
+    if (selectedKind && selectedUrl) {
+      // Explicit setup owns both protocol and endpoint. It must be able to replace a malformed
+      // shipped URL instead of trying to normalize the retired value first.
+      return { kind: selectedKind, url: selectedUrl };
+    }
     return resolveLegacyTransportWithoutDetection({
       entry,
       parent: signal,

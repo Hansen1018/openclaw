@@ -1536,6 +1536,44 @@ describe("update-cli", () => {
     }
   });
 
+  it("runs updated plugin migrations for a plugin-only current-process update", async () => {
+    mockGitUpdateAfterMutation();
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: true,
+      config: baseConfig,
+      outcomes: [],
+    });
+    let strictValidationEnv: string | undefined;
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async (options) => {
+      if (!options) {
+        strictValidationEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+      }
+      return baseSnapshot;
+    });
+    vi.mocked(runExec).mockImplementationOnce(async (_file, args) => {
+      expect(args).toEqual([
+        "/tmp/openclaw-updated-entry.mjs",
+        "doctor",
+        "--repair",
+        "--non-interactive",
+        "--no-workspace-suggestions",
+        "--yes",
+      ]);
+      return { stdout: "", stderr: "" };
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledTimes(1);
+    expect(runExec).toHaveBeenCalledTimes(1);
+    expect(strictValidationEnv).toBe("0");
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("fails the update when the fresh process exits non-zero", async () => {
     setupUpdatedRootRefresh();
     spawn.mockImplementationOnce(() => {
@@ -2063,6 +2101,9 @@ describe("update-cli", () => {
   });
 
   it("includes colored ClawHub trust warnings in json post-core plugin output", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
     const trustWarning =
       "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
       "│ • Security scan:     suspicious                                      │\n" +
@@ -2289,6 +2330,9 @@ describe("update-cli", () => {
   });
 
   it("marks disabled-after-failure plugin skips as post-update warnings", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
     updateNpmInstalledPlugins.mockResolvedValueOnce({
       changed: true,
       config: baseConfig,
@@ -5557,6 +5601,9 @@ describe("update-cli", () => {
   });
 
   it("keeps the requested channel when plugin sync writes config after update", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("/tmp/openclaw-updated-entry.mjs");
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
     syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
@@ -5585,6 +5632,9 @@ describe("update-cli", () => {
   });
 
   it("refreshes post-doctor config before post-update plugin sync", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("/tmp/openclaw-updated-entry.mjs");
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
     const preUpdateConfig = { update: { channel: "stable" } } as OpenClawConfig;

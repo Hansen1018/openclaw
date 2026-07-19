@@ -279,6 +279,83 @@ describe("signalSetupAdapter", () => {
     expect(next?.channels?.signal).not.toHaveProperty("httpUrl");
   });
 
+  it("replaces a malformed legacy endpoint through explicit setup selection", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            apiMode: "auto",
+            httpUrl: "http://[bad",
+            account: "+15555550124",
+          },
+        },
+      } as never,
+      accountId: "default",
+      input: {
+        httpUrl: "http://signal-container:8080",
+        signalTransport: "container",
+      },
+    });
+
+    expect(next?.channels?.signal?.transport).toEqual({
+      kind: "container",
+      url: "http://signal-container:8080",
+    });
+    expect(next?.channels?.signal).not.toHaveProperty("apiMode");
+    expect(next?.channels?.signal).not.toHaveProperty("httpUrl");
+  });
+
+  it("replaces an invalid legacy managed port through explicit setup selection", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            apiMode: "native",
+            autoStart: true,
+            httpPort: 70_000,
+            account: "+15555550124",
+          },
+        },
+      } as never,
+      accountId: "default",
+      input: {
+        httpUrl: "http://signal-native:8080",
+        signalTransport: "external-native",
+      },
+    });
+
+    expect(next?.channels?.signal?.transport).toEqual({
+      kind: "external-native",
+      url: "http://signal-native:8080",
+    });
+    expect(next?.channels?.signal).not.toHaveProperty("httpPort");
+  });
+
+  it("keeps explicit recovery blocked by an unrelated malformed sibling", () => {
+    expect(() =>
+      signalSetupAdapter.applyAccountConfig?.({
+        cfg: {
+          channels: {
+            signal: {
+              apiMode: "auto",
+              accounts: {
+                work: { account: "+15555550124", httpUrl: "http://[bad" },
+                personal: { account: "+15555550125", httpUrl: "http://[also-bad" },
+              },
+            },
+          },
+        } as never,
+        accountId: "work",
+        input: {
+          httpUrl: "http://signal-work:8080",
+          signalTransport: "external-native",
+        },
+      }),
+    ).toThrow(
+      "Signal has other ambiguous legacy account endpoints. Resolve each endpoint explicitly or bring them online and run openclaw doctor --fix.",
+    );
+  });
+
   it("atomically recovers every legacy account from an explicit transport selection", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {
