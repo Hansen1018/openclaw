@@ -122,14 +122,14 @@ function buildSignalSetupPatch(input: {
   };
 }
 
-function managedTransportOptions(
-  transport: SignalTransportConfig | undefined,
-): Omit<Extract<SignalTransportConfig, { kind: "managed-native" }>, "kind"> | undefined {
-  if (transport?.kind !== "managed-native") {
-    return undefined;
-  }
-  const { kind: _kind, ...options } = transport;
-  return options;
+function managedTransportOverridesFromSetupInput(
+  input: ChannelSetupInput,
+): Omit<Extract<SignalTransportConfig, { kind: "managed-native" }>, "kind"> {
+  return {
+    ...(input.cliPath ? { cliPath: input.cliPath } : {}),
+    ...(input.httpHost ? { httpHost: input.httpHost } : {}),
+    ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
+  };
 }
 
 type DetectSignalSetupTransport = (params: {
@@ -391,8 +391,6 @@ export const signalSetupAdapter: ChannelSetupAdapter = {
           transport: rootTransport ?? nestedDefaultTransport,
         })
       : recoveredCfg;
-    // Setup must be able to replace a hand-authored duplicate bind before runtime validation.
-    const previousTransport = resolveConfiguredSignalTransport(cfg, accountId);
     const next = signalSetupAdapterBase.applyAccountConfig?.({ ...params, cfg, accountId }) ?? cfg;
     const configuredTransport = resolveConfiguredSignalTransport(next, accountId);
     if (configuredTransport && configuredTransport.kind !== "managed-native") {
@@ -406,12 +404,10 @@ export const signalSetupAdapter: ChannelSetupAdapter = {
       cfg: next,
       accountId,
       transport: prepareSignalManagedNativeTransport({
-        cfg: next,
+        // Use pre-patch transport state so aligned connection URLs can follow authored bind edits.
+        cfg,
         accountId,
-        overrides: {
-          ...managedTransportOptions(previousTransport),
-          ...managedTransportOptions(configuredTransport),
-        },
+        overrides: managedTransportOverridesFromSetupInput(params.input),
       }),
     });
   },

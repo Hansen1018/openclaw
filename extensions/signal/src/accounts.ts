@@ -53,7 +53,10 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("si
 export const listSignalAccountIds = listAccountIds;
 export const resolveDefaultSignalAccountId = resolveDefaultAccountId;
 
-function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): SignalAccountConfig {
+export function resolveSignalAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): SignalAccountConfig {
   const channelConfig = cfg.channels?.signal;
   const {
     transport: _transport,
@@ -94,7 +97,7 @@ function resolveSignalManagedNativePort(params: {
       if (normalizeAccountId(accountId) === params.accountId) {
         continue;
       }
-      const accountConfig = mergeSignalAccountConfig(params.cfg, accountId);
+      const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
       if (!isSignalAccountConfigured(accountConfig)) {
         continue;
       }
@@ -129,7 +132,7 @@ function resolveSignalManagedNativePort(params: {
   // Reserve concrete local endpoints first, then assign implicit ports in account order.
   // Independent account resolution must produce the same collision-free daemon binds.
   for (const accountId of listSignalAccountIds(params.cfg)) {
-    const accountConfig = mergeSignalAccountConfig(params.cfg, accountId);
+    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
     if (!isSignalAccountConfigured(accountConfig)) {
       continue;
     }
@@ -210,7 +213,7 @@ export function resolveSignalAccount(params: {
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
   const baseEnabled = params.cfg.channels?.signal?.enabled !== false;
-  const merged = mergeSignalAccountConfig(params.cfg, accountId);
+  const merged = resolveSignalAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const transport = resolveSignalTransport(

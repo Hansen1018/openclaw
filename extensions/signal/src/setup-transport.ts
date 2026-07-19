@@ -5,8 +5,13 @@ import {
   DEFAULT_ACCOUNT_ID,
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
-import { listSignalAccountIds, resolveSignalAccount, resolveSignalTransport } from "./accounts.js";
+import {
+  listSignalAccountIds,
+  resolveSignalAccountConfig,
+  resolveSignalTransport,
+} from "./accounts.js";
 import { clearLegacySignalTransportFieldsForAccount } from "./config-compat.js";
 import type {
   SignalContainerTransportProbe,
@@ -103,28 +108,44 @@ export function prepareSignalManagedNativeTransport(params: {
       params.overrides?.httpHost ?? existingManaged?.httpHost ?? DEFAULT_SIGNAL_MANAGED_NATIVE_HOST,
   };
   const reservedPorts = new Set<number>();
-  // Resolve existing accounts before adding the target. Persisting only the target's allocated
-  // port reserves the newcomers around established implicit ports, even if account ids reorder.
+  let implicitManagedAccountCount = 0;
+  // Reserve existing accounts before adding the target. Persisting only the target's allocated
+  // port keeps newcomers after established implicit ports, even if account ids reorder.
   for (const accountId of listSignalAccountIds(params.cfg)) {
     if (normalizeAccountId(accountId) === normalizeAccountId(params.accountId)) {
       continue;
     }
-    const account = resolveSignalAccount({ cfg: params.cfg, accountId });
-    if (!account.configured) {
+    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
+    if (!normalizeOptionalString(accountConfig.account) && !accountConfig.transport) {
       continue;
     }
-    if (account.transport.kind === "managed-native") {
-      reservedPorts.add(account.transport.httpPort);
-      const localConnectionPort = resolveLocalSignalTransportPort(account.transport.baseUrl);
-      if (localConnectionPort !== undefined) {
-        reservedPorts.add(localConnectionPort);
+    const transport = accountConfig.transport;
+    if (transport?.kind === "managed-native") {
+      if (transport.httpPort !== undefined) {
+        reservedPorts.add(transport.httpPort);
+      } else {
+        implicitManagedAccountCount += 1;
+      }
+      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
+        const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
+        if (localConnectionPort !== undefined) {
+          reservedPorts.add(localConnectionPort);
+        }
       }
       continue;
     }
-    const localPort = resolveLocalSignalTransportPort(account.transport.baseUrl);
-    if (localPort !== undefined) {
-      reservedPorts.add(localPort);
+    if (transport?.kind === "external-native" || transport?.kind === "container") {
+      const localPort = resolveLocalSignalTransportPort(transport.url);
+      if (localPort !== undefined) {
+        reservedPorts.add(localPort);
+      }
+      continue;
     }
+    implicitManagedAccountCount += 1;
+  }
+  for (let remaining = implicitManagedAccountCount; remaining > 0; remaining -= 1) {
+    const httpPort = allocateSignalManagedNativePort({ reservedPorts });
+    reservedPorts.add(httpPort);
   }
 
   const hasIndependentPreparedConnectionUrl =
@@ -141,6 +162,11 @@ export function prepareSignalManagedNativeTransport(params: {
     }
   }
 
+  if (params.overrides?.httpPort !== undefined && reservedPorts.has(params.overrides.httpPort)) {
+    throw new Error(
+      `Signal managed native port ${params.overrides.httpPort} is already reserved by another account or local transport endpoint.`,
+    );
+  }
   const httpPort = allocateSignalManagedNativePort({ reservedPorts, preferredPort });
   // A managed connection URL that points at the daemon's bind is one endpoint.
   // Keep its connection endpoint aligned when setup changes or reallocates the bind.

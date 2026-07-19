@@ -62,6 +62,26 @@ describe("prepareSignalManagedNativeTransport", () => {
     });
   });
 
+  it("rejects an explicitly requested port owned by another account", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          account: "+15555550123",
+          transport: { kind: "managed-native", httpPort: 8080 },
+          accounts: { work: { account: "+15555550124" } },
+        },
+      },
+    } as const;
+
+    expect(() =>
+      prepareSignalManagedNativeTransport({
+        cfg: cfg as never,
+        accountId: "work",
+        overrides: { httpPort: 8080 },
+      }),
+    ).toThrow("Signal managed native port 8080 is already reserved");
+  });
+
   it("preserves an existing implicit port when adding a lexically earlier account", () => {
     const cfg = {
       channels: {

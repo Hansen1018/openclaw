@@ -37,6 +37,37 @@ describe("signalSetupAdapter", () => {
     });
   });
 
+  it("realigns an existing managed connection URL after a partial bind update", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              work: {
+                account: "+15555550124",
+                transport: {
+                  kind: "managed-native",
+                  url: "http://127.0.0.1:8181",
+                  httpHost: "127.0.0.1",
+                  httpPort: 8181,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      input: { httpHost: "127.0.0.2", httpPort: "8282" },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.2:8282",
+      httpHost: "127.0.0.2",
+      httpPort: 8282,
+    });
+  });
+
   it("uses the setup transport allocator for a second managed account", () => {
     const cfg: OpenClawConfig = {
       channels: {
