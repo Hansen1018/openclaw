@@ -428,8 +428,7 @@ extension OpenClawChatViewModel {
         guard !normalizedLeafEntryID.isEmpty else { return }
         guard !self.hasBlockingRunActivity,
               !self.isSending,
-              !self.isAborting,
-              !self.isSwitchingSessionBranch
+              !self.isAborting
         else { return }
         guard !self.sessionBranches.contains(where: {
             $0.leafEntryId == normalizedLeafEntryID && $0.active

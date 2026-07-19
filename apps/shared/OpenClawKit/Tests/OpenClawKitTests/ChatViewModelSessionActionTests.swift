@@ -10,6 +10,7 @@ private actor SessionActionTransportState {
     var branchListSessionKeys: [String] = []
     var branchListCallCount = 0
     var switchedBranches: [(sessionKey: String, leafEntryID: String)] = []
+    var sentSessionKeys: [String] = []
     var historySessionKeys: [String] = []
     var patchedKeys: [String] = []
     var deletedKeys: [String] = []
@@ -37,6 +38,10 @@ private actor SessionActionTransportState {
 
     func recordBranchSwitch(sessionKey: String, leafEntryID: String) {
         self.switchedBranches.append((sessionKey, leafEntryID))
+    }
+
+    func recordSend(sessionKey: String) {
+        self.sentSessionKeys.append(sessionKey)
     }
 
     func recordHistory(_ sessionKey: String) {
@@ -138,12 +143,13 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     }
 
     func sendMessage(
-        sessionKey _: String,
+        sessionKey: String,
         message _: String,
         thinking _: String,
         idempotencyKey _: String,
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
+        await self.state.recordSend(sessionKey: sessionKey)
         throw NSError(domain: "SessionActionTransport", code: 1)
     }
 
@@ -268,6 +274,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
 
     func switchedBranches() async -> [(sessionKey: String, leafEntryID: String)] {
         await self.state.switchedBranches
+    }
+
+    func sentSessionKeys() async -> [String] {
+        await self.state.sentSessionKeys
     }
 
     func historySessionKeys() async -> [String] {
@@ -570,6 +580,42 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.switchedBranches().count == 1)
         gate.release()
         await firstSwitch.value
+    }
+
+    @Test func `branch switch blocks sends and rewinds until refresh completes`() async {
+        let gate = SessionActionCompletionGate()
+        let branches = self.branches()
+        let transport = SessionActionTransport(branchSwitchGate: gate, branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+        viewModel.input = "new message"
+
+        let branchSwitch = Task { await viewModel.switchToBranch("leaf-new") }
+        guard await self.waitForForkStart(gate) else {
+            gate.release()
+            branchSwitch.cancel()
+            Issue.record("timed out waiting for branch switch start signal")
+            return
+        }
+
+        #expect(viewModel.hasBlockingRunActivity)
+        #expect(viewModel.canSend == false)
+        viewModel.send()
+        await viewModel.rewindToMessage(self.userMessage(entryID: "message-42"))
+        await viewModel.forkAtMessage(self.userMessage(entryID: "message-42"))
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        #expect(await transport.sentSessionKeys().isEmpty)
+        #expect(await transport.rewoundMessages().isEmpty)
+        #expect(await transport.forkedMessages().isEmpty)
+
+        gate.release()
+        await branchSwitch.value
+
+        #expect(viewModel.hasBlockingRunActivity == false)
+        #expect(viewModel.canSend)
     }
 
     @Test func `stale branch switch completion is ignored`() async {
