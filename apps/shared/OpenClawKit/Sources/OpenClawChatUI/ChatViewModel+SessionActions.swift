@@ -395,7 +395,8 @@ extension OpenClawChatViewModel {
         }
     }
 
-    public func refreshSessionBranches() async {
+    @discardableResult
+    public func refreshSessionBranches() async -> Bool {
         let session = self.currentSessionSnapshot()
         self.sessionBranchesRefreshGeneration &+= 1
         let refreshGeneration = self.sessionBranchesRefreshGeneration
@@ -411,14 +412,16 @@ extension OpenClawChatViewModel {
             let response = try await self.transport.listSessionBranches(sessionKey: session.key)
             guard self.isCurrentSession(session),
                   refreshGeneration == self.sessionBranchesRefreshGeneration
-            else { return }
+            else { return false }
             self.sessionBranches = response.branches
+            return true
         } catch {
             guard self.isCurrentSession(session),
                   refreshGeneration == self.sessionBranchesRefreshGeneration
-            else { return }
+            else { return false }
             chatSessionActionsLogger.debug(
                 "sessions.branches.list failed \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -439,38 +442,13 @@ extension OpenClawChatViewModel {
             try await self.transport.switchSessionBranch(
                 sessionKey: initiatingSession.key,
                 leafEntryId: normalizedLeafEntryID)
-            guard self.isCurrentSession(initiatingSession),
-                  self.isCurrentSessionBranchSwitchActivity(switchActivity)
-            else { return }
+            guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
             self.replyTarget = nil
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
-            let historyRequest = self.beginHistoryRequest(for: initiatingSession)
-            var historyRefresh = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
-            guard self.isCurrentSession(initiatingSession),
-                  self.isCurrentSessionBranchSwitchActivity(switchActivity)
-            else { return }
-            if let errorMessage = historyRefresh.errorMessage {
-                self.errorText = errorMessage
-                let retryRequest = self.beginHistoryRequest(for: initiatingSession)
-                historyRefresh = await self.refreshHistoryAfterRun(historyRequest: retryRequest)
-                guard self.isCurrentSession(initiatingSession),
-                      self.isCurrentSessionBranchSwitchActivity(switchActivity)
-                else { return }
-                if let errorMessage = historyRefresh.errorMessage {
-                    self.errorText = errorMessage
-                    self.hasAppliedLiveHistory = false
-                    self.isShowingCachedTranscript = false
-                    self.replaceMessages([])
-                    return
-                }
-                self.errorText = nil
-            }
-            await self.refreshSessionBranches()
+            await self.reconcileSessionBranchChange(switchActivity)
         } catch {
-            guard self.isCurrentSession(initiatingSession),
-                  self.isCurrentSessionBranchSwitchActivity(switchActivity)
-            else { return }
+            guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.branches.switch failed \(error.localizedDescription, privacy: .public)")

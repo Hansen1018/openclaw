@@ -54,15 +54,15 @@ extension OpenClawChatViewModel {
                 self.runMessageScopesByRunID.removeAll()
                 self.provisionalFinalMessagesByID.removeAll()
                 let context = self.beginHistoryRequest()
-                let switchActivity = change.reason == "branch-switch"
-                    ? self.beginSessionBranchSwitchActivity(for: context.session)
-                    : nil
-                Task {
-                    defer {
-                        if let switchActivity {
-                            self.endSessionBranchSwitchActivity(switchActivity)
-                        }
+                if change.reason == "branch-switch" {
+                    let switchActivity = self.beginSessionBranchSwitchActivity(for: context.session)
+                    Task {
+                        defer { self.endSessionBranchSwitchActivity(switchActivity) }
+                        await self.reconcileSessionBranchChange(switchActivity)
                     }
+                    return
+                }
+                Task {
                     await self.refreshHistoryAfterRun(historyRequest: context)
                     guard self.isCurrentSession(context.session) else { return }
                     await self.refreshSessionBranches()
@@ -761,11 +761,10 @@ extension OpenClawChatViewModel {
                 runSnapshotApplied: applied && runSnapshotApplied,
                 supportsInFlightRunState: supportsInFlightRunState,
                 hasInFlightRun: hasInFlightRun,
-                sessionHasActiveRun: sessionHasActiveRun,
-                errorMessage: nil)
+                sessionHasActiveRun: sessionHasActiveRun)
         } catch {
             transportEventsLogger.error("refresh history failed \(error.localizedDescription, privacy: .public)")
-            return .failed(errorMessage: error.localizedDescription)
+            return .failed
         }
     }
 

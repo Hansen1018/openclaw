@@ -383,17 +383,13 @@ public final class OpenClawChatViewModel {
         let supportsInFlightRunState: Bool
         let hasInFlightRun: Bool
         let sessionHasActiveRun: Bool
-        let errorMessage: String?
 
-        static func failed(errorMessage: String) -> RunHistoryRefreshResult {
-            RunHistoryRefreshResult(
-                applied: false,
-                runSnapshotApplied: false,
-                supportsInFlightRunState: false,
-                hasInFlightRun: false,
-                sessionHasActiveRun: false,
-                errorMessage: errorMessage)
-        }
+        static let failed = RunHistoryRefreshResult(
+            applied: false,
+            runSnapshotApplied: false,
+            supportsInFlightRunState: false,
+            hasInFlightRun: false,
+            sessionHasActiveRun: false)
     }
 
     struct LatestUserTurn {
@@ -805,7 +801,7 @@ extension OpenClawChatViewModel {
     }
 
     func isCurrentSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) -> Bool {
-        self.sessionBranchSwitchActivity == activity
+        self.sessionBranchSwitchActivity == activity && self.isCurrentSession(activity.session)
     }
 
     func endSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) {
@@ -813,11 +809,37 @@ extension OpenClawChatViewModel {
         self.sessionBranchSwitchActivity = nil
     }
 
+    func reconcileSessionBranchChange(_ activity: SessionBranchSwitchActivity) async {
+        var stateApplied = false
+        for _ in 0..<2 {
+            stateApplied = await self.refreshHistoryAfterRun(
+                historyRequest: self.beginHistoryRequest(for: activity.session)).applied
+            guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+            if stateApplied { break }
+        }
+        if stateApplied {
+            stateApplied = await self.refreshSessionBranches()
+        }
+        guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+        guard stateApplied else {
+            // After the server-side branch changes, never keep partially consistent local state.
+            // Either install the new state completely or reload the session from scratch.
+            self.advanceSessionGeneration()
+            self.clearSessionOwnedState()
+            self.startBootstrap(paintCachedTranscript: false)
+            return
+        }
+        self.errorText = nil
+    }
+
     private func isCurrentBootstrap(_ context: BootstrapContext) -> Bool {
         self.bootstrapGeneration == context.id && self.isCurrentSession(context.session)
     }
 
-    private func startBootstrap(sessionKey requestedSessionKey: String? = nil) {
+    private func startBootstrap(
+        sessionKey requestedSessionKey: String? = nil,
+        paintCachedTranscript: Bool = true)
+    {
         let sessionKey = requestedSessionKey ?? self.sessionKey
         guard sessionKey == self.sessionKey else { return }
         self.unreadPatchGuard.activate(key: self.sessionMutationIdentity(for: sessionKey))
@@ -837,7 +859,9 @@ extension OpenClawChatViewModel {
         let context = BootstrapContext(
             id: bootstrapGeneration,
             historyRequest: historyRequest)
-        paintFromCacheIfNeeded(session: context.session)
+        if paintCachedTranscript {
+            paintFromCacheIfNeeded(session: context.session)
+        }
         restoreOutboxMessages(session: context.session)
         Task { [weak self] in await self?.refreshSessionBranches() }
         self.bootstrapTask = Task { [weak self] in

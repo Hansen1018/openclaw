@@ -114,6 +114,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     private let branches: [OpenClawChatSessionBranch]
     private let branchListResponses: [[OpenClawChatSessionBranch]]
     private let branchListFailureIndices: Set<Int>
+    private let historyGates: [Int: SessionActionCompletionGate]
     private let historyFailureIndices: Set<Int>
 
     init(
@@ -127,6 +128,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         branches: [OpenClawChatSessionBranch] = [],
         branchListResponses: [[OpenClawChatSessionBranch]] = [],
         branchListFailureIndices: Set<Int> = [],
+        historyGates: [Int: SessionActionCompletionGate] = [:],
         historyFailureIndices: Set<Int> = [])
     {
         self.forkGate = forkGate
@@ -139,11 +141,13 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         self.branches = branches
         self.branchListResponses = branchListResponses
         self.branchListFailureIndices = branchListFailureIndices
+        self.historyGates = historyGates
         self.historyFailureIndices = historyFailureIndices
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         let callIndex = await self.state.recordHistory(sessionKey)
+        await self.historyGates[callIndex]?.suspendCompletion()
         if self.historyFailureIndices.contains(callIndex) {
             throw NSError(
                 domain: "SessionActionTransport",
@@ -578,21 +582,45 @@ struct ChatViewModelSessionActionTests {
         #expect(viewModel.sessionBranches == branches)
     }
 
-    @Test func `branch switch clears stale transcript after history retry fails`() async {
-        let branches = self.branches()
+    @Test(arguments: [false, true])
+    func `branch change failure funnels through full session reload`(remoteEvent: Bool) async {
+        let historyReloadGate = SessionActionCompletionGate()
+        let branchesReloadGate = SessionActionCompletionGate()
+        let staleBranches = self.branches()
+        let freshBranches = self.branches(activeLeafEntryID: "leaf-new")
         let transport = SessionActionTransport(
-            branches: branches,
+            branchListGates: [branchesReloadGate],
+            branches: freshBranches,
+            historyGates: [2: historyReloadGate],
             historyFailureIndices: [0, 1])
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
-        viewModel.sessionBranches = branches
+        viewModel.sessionBranches = staleBranches
         viewModel.messages = [self.userMessage(entryID: "pre-switch")]
 
-        await viewModel.switchToBranch("leaf-new")
+        if remoteEvent {
+            viewModel.handleTransportEvent(.sessionsChanged(.init(
+                sessionKey: "main",
+                reason: "branch-switch")))
+        } else {
+            await viewModel.switchToBranch("leaf-new")
+        }
 
-        #expect(await transport.historySessionKeys() == ["main", "main"])
+        let historyReloadStarted = await self.waitForForkStart(historyReloadGate)
+        let branchesReloadStarted = await self.waitForForkStart(branchesReloadGate)
+        #expect(historyReloadStarted)
+        #expect(branchesReloadStarted)
+        #expect(await transport.historySessionKeys() == ["main", "main", "main"])
+        #expect(await transport.branchListSessionKeys() == ["main"])
         #expect(viewModel.messages.isEmpty)
+        #expect(viewModel.sessionBranches.isEmpty)
         #expect(viewModel.hasAppliedLiveHistory == false)
-        #expect(viewModel.errorText == "history unavailable")
+        #expect(viewModel.isLoading)
+
+        historyReloadGate.release()
+        branchesReloadGate.release()
+        let reloaded = await self.waitForBranchReload(viewModel, branches: freshBranches)
+        #expect(reloaded)
+        #expect(viewModel.sessionBranches.first(where: \.active)?.leafEntryId == "leaf-new")
     }
 
     @Test func `branch switch does not dispatch while busy`() async {
@@ -884,6 +912,22 @@ struct ChatViewModelSessionActionTests {
         let deadline = clock.now + timeout
         while clock.now < deadline {
             if viewModel.hasBlockingRunActivity == false {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForBranchReload(
+        _ viewModel: OpenClawChatViewModel,
+        branches: [OpenClawChatSessionBranch],
+        timeout: Duration = .seconds(15)) async -> Bool
+    {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if viewModel.sessionBranches == branches, !viewModel.isLoading {
                 return true
             }
             await Task.yield()
