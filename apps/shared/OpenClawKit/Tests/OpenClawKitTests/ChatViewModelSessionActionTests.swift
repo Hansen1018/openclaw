@@ -12,6 +12,7 @@ private actor SessionActionTransportState {
     var switchedBranches: [(sessionKey: String, leafEntryID: String)] = []
     var sentSessionKeys: [String] = []
     var historySessionKeys: [String] = []
+    var historyCallCount = 0
     var patchedKeys: [String] = []
     var deletedKeys: [String] = []
     var groupPuts: [[String]] = []
@@ -44,8 +45,10 @@ private actor SessionActionTransportState {
         self.sentSessionKeys.append(sessionKey)
     }
 
-    func recordHistory(_ sessionKey: String) {
+    func recordHistory(_ sessionKey: String) -> Int {
         self.historySessionKeys.append(sessionKey)
+        defer { self.historyCallCount += 1 }
+        return self.historyCallCount
     }
 
     func recordPatch(_ key: String) {
@@ -110,6 +113,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     private let forkAtMessageEditorText: String?
     private let branches: [OpenClawChatSessionBranch]
     private let branchListResponses: [[OpenClawChatSessionBranch]]
+    private let branchListFailureIndices: Set<Int>
+    private let historyFailureIndices: Set<Int>
 
     init(
         forkGate: SessionActionCompletionGate? = nil,
@@ -120,7 +125,9 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         forkAtMessageSessionKey: String = "forked-at-message",
         forkAtMessageEditorText: String? = "forked draft",
         branches: [OpenClawChatSessionBranch] = [],
-        branchListResponses: [[OpenClawChatSessionBranch]] = [])
+        branchListResponses: [[OpenClawChatSessionBranch]] = [],
+        branchListFailureIndices: Set<Int> = [],
+        historyFailureIndices: Set<Int> = [])
     {
         self.forkGate = forkGate
         self.forkAtMessageGate = forkAtMessageGate
@@ -131,10 +138,18 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         self.forkAtMessageEditorText = forkAtMessageEditorText
         self.branches = branches
         self.branchListResponses = branchListResponses
+        self.branchListFailureIndices = branchListFailureIndices
+        self.historyFailureIndices = historyFailureIndices
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        await self.state.recordHistory(sessionKey)
+        let callIndex = await self.state.recordHistory(sessionKey)
+        if self.historyFailureIndices.contains(callIndex) {
+            throw NSError(
+                domain: "SessionActionTransport",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "history unavailable"])
+        }
         return OpenClawChatHistoryPayload(
             sessionKey: sessionKey,
             sessionId: "session-\(sessionKey)",
@@ -182,6 +197,9 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         let callIndex = await self.state.recordBranchList(sessionKey)
         if self.branchListGates.indices.contains(callIndex) {
             await self.branchListGates[callIndex].suspendCompletion()
+        }
+        if self.branchListFailureIndices.contains(callIndex) {
+            throw NSError(domain: "SessionActionTransport", code: 3)
         }
         let branches = self.branchListResponses.indices.contains(callIndex)
             ? self.branchListResponses[callIndex]
@@ -504,6 +522,19 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.branchListSessionKeys() == ["main"])
     }
 
+    @Test func `branch refresh failure preserves cached branches`() async {
+        let branches = self.branches()
+        let transport = SessionActionTransport(branchListFailureIndices: [0])
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+
+        await viewModel.refreshSessionBranches()
+
+        #expect(viewModel.sessionBranches == branches)
+        #expect(viewModel.isLoadingSessionBranches == false)
+        #expect(await transport.branchListSessionKeys() == ["main"])
+    }
+
     @Test func `newer branch refresh supersedes an older response`() async {
         let firstGate = SessionActionCompletionGate()
         let oldBranches = self.branches()
@@ -545,6 +576,23 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.historySessionKeys() == ["main"])
         #expect(await transport.branchListSessionKeys() == ["main"])
         #expect(viewModel.sessionBranches == branches)
+    }
+
+    @Test func `branch switch clears stale transcript after history retry fails`() async {
+        let branches = self.branches()
+        let transport = SessionActionTransport(
+            branches: branches,
+            historyFailureIndices: [0, 1])
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+        viewModel.messages = [self.userMessage(entryID: "pre-switch")]
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.historySessionKeys() == ["main", "main"])
+        #expect(viewModel.messages.isEmpty)
+        #expect(viewModel.hasAppliedLiveHistory == false)
+        #expect(viewModel.errorText == "history unavailable")
     }
 
     @Test func `branch switch does not dispatch while busy`() async {

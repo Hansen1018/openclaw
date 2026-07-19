@@ -383,13 +383,17 @@ public final class OpenClawChatViewModel {
         let supportsInFlightRunState: Bool
         let hasInFlightRun: Bool
         let sessionHasActiveRun: Bool
+        let errorMessage: String?
 
-        static let failed = RunHistoryRefreshResult(
-            applied: false,
-            runSnapshotApplied: false,
-            supportsInFlightRunState: false,
-            hasInFlightRun: false,
-            sessionHasActiveRun: false)
+        static func failed(errorMessage: String) -> RunHistoryRefreshResult {
+            RunHistoryRefreshResult(
+                applied: false,
+                runSnapshotApplied: false,
+                supportsInFlightRunState: false,
+                hasInFlightRun: false,
+                sessionHasActiveRun: false,
+                errorMessage: errorMessage)
+        }
     }
 
     struct LatestUserTurn {

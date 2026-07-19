@@ -417,7 +417,6 @@ extension OpenClawChatViewModel {
             guard self.isCurrentSession(session),
                   refreshGeneration == self.sessionBranchesRefreshGeneration
             else { return }
-            self.sessionBranches = []
             chatSessionActionsLogger.debug(
                 "sessions.branches.list failed \(error.localizedDescription, privacy: .public)")
         }
@@ -447,10 +446,26 @@ extension OpenClawChatViewModel {
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
-            _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
+            var historyRefresh = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
             guard self.isCurrentSession(initiatingSession),
                   self.isCurrentSessionBranchSwitchActivity(switchActivity)
             else { return }
+            if let errorMessage = historyRefresh.errorMessage {
+                self.errorText = errorMessage
+                let retryRequest = self.beginHistoryRequest(for: initiatingSession)
+                historyRefresh = await self.refreshHistoryAfterRun(historyRequest: retryRequest)
+                guard self.isCurrentSession(initiatingSession),
+                      self.isCurrentSessionBranchSwitchActivity(switchActivity)
+                else { return }
+                if let errorMessage = historyRefresh.errorMessage {
+                    self.errorText = errorMessage
+                    self.hasAppliedLiveHistory = false
+                    self.isShowingCachedTranscript = false
+                    self.replaceMessages([])
+                    return
+                }
+                self.errorText = nil
+            }
             await self.refreshSessionBranches()
         } catch {
             guard self.isCurrentSession(initiatingSession),

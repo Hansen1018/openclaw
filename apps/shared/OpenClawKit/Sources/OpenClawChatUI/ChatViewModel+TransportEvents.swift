@@ -761,10 +761,11 @@ extension OpenClawChatViewModel {
                 runSnapshotApplied: applied && runSnapshotApplied,
                 supportsInFlightRunState: supportsInFlightRunState,
                 hasInFlightRun: hasInFlightRun,
-                sessionHasActiveRun: sessionHasActiveRun)
+                sessionHasActiveRun: sessionHasActiveRun,
+                errorMessage: nil)
         } catch {
             transportEventsLogger.error("refresh history failed \(error.localizedDescription, privacy: .public)")
-            return .failed
+            return .failed(errorMessage: error.localizedDescription)
         }
     }
 
