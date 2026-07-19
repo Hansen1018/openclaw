@@ -181,6 +181,29 @@ describe("resolveSignalAccount", () => {
     });
   });
 
+  it("rejects duplicate explicit managed native ports", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            personal: {
+              account: "+15555550123",
+              transport: { kind: "managed-native", httpPort: 8181 },
+            },
+            work: {
+              account: "+15555550124",
+              transport: { kind: "managed-native", httpPort: 8181 },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(() => resolveSignalAccount({ cfg, accountId: "work" })).toThrow(
+      'Signal managed native accounts "work" and "personal" both bind port 8181.',
+    );
+  });
+
   it("does not let an unconfigured placeholder consume a managed port", () => {
     const cfg = {
       channels: {

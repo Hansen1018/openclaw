@@ -89,6 +89,21 @@ function resolveSignalManagedNativePort(params: {
   transport: SignalTransportConfig | undefined;
 }): number {
   if (params.transport?.kind === "managed-native" && params.transport.httpPort !== undefined) {
+    for (const accountId of listSignalAccountIds(params.cfg)) {
+      if (normalizeAccountId(accountId) === params.accountId) {
+        continue;
+      }
+      const accountConfig = mergeSignalAccountConfig(params.cfg, accountId);
+      if (
+        isSignalAccountConfigured(accountConfig) &&
+        accountConfig.transport?.kind === "managed-native" &&
+        accountConfig.transport.httpPort === params.transport.httpPort
+      ) {
+        throw new Error(
+          `Signal managed native accounts "${params.accountId}" and "${accountId}" both bind port ${params.transport.httpPort}. Assign each account a distinct transport.httpPort.`,
+        );
+      }
+    }
     return params.transport.httpPort;
   }
 
