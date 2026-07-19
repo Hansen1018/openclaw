@@ -875,6 +875,13 @@ function resolveExternalReadOnlyChannelPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function isTrustedInvalidConfigRecoveryOwner(record: PluginManifestRecord): boolean {
+  return (
+    record.trustedOfficialInstall === true &&
+    record.packageChannel?.setupCapabilities?.invalidConfigRecovery === true
+  );
+}
+
 function resolveMaintenanceActivationSourceConfig(params: {
   config: OpenClawConfig;
   records: readonly PluginManifestRecord[];
@@ -885,6 +892,7 @@ function resolveMaintenanceActivationSourceConfig(params: {
   for (const record of params.records) {
     if (
       (record.origin !== "config" && record.origin !== "global") ||
+      !isTrustedInvalidConfigRecoveryOwner(record) ||
       !record.channels.some((channelId) => requestedChannelIds.has(channelId))
     ) {
       continue;
@@ -968,9 +976,8 @@ export function resolveReadOnlyChannelPluginsForConfig(
         })),
     ...(options.scopedChannelIds ?? []),
   ]).filter(isSafeManifestChannelId);
-  // Doctor cleanup must import the setup entry for an explicitly scoped installed owner even
-  // while that owner is disabled. The derived activation source retains deny/allow and trust
-  // policy, and never enables workspace plugins or changes the persisted configuration.
+  // Doctor cleanup may reactivate only a trusted official owner that explicitly declares invalid
+  // config recovery. Arbitrary disabled plugin code must stay inert while config is untrusted.
   const discoveryActivationSourceConfig = options.includeDisabledPluginOwners
     ? resolveMaintenanceActivationSourceConfig({
         config: activationSourceConfig,
@@ -1021,14 +1028,32 @@ export function resolveReadOnlyChannelPluginsForConfig(
   const missingConfiguredChannelIds = configuredChannelIds.filter(
     (channelId) => !byId.has(channelId),
   );
-  const externalPluginIds = resolveExternalReadOnlyChannelPluginIds({
-    cfg: options.includeDisabledPluginOwners ? discoveryActivationSourceConfig : cfg,
-    activationSourceConfig: discoveryActivationSourceConfig,
+  const normallyEnabledExternalPluginIds = resolveExternalReadOnlyChannelPluginIds({
+    cfg,
+    activationSourceConfig,
     channelIds: missingConfiguredChannelIds,
     records: externalManifestRecords,
     workspaceDir,
     env,
   });
+  const maintenanceExternalPluginIds = options.includeDisabledPluginOwners
+    ? resolveExternalReadOnlyChannelPluginIds({
+        cfg: discoveryActivationSourceConfig,
+        activationSourceConfig: discoveryActivationSourceConfig,
+        channelIds: missingConfiguredChannelIds,
+        records: externalManifestRecords,
+        workspaceDir,
+        env,
+      }).filter((pluginId) =>
+        externalManifestRecords.some(
+          (record) => record.id === pluginId && isTrustedInvalidConfigRecoveryOwner(record),
+        ),
+      )
+    : [];
+  const externalPluginIds = uniqueStrings([
+    ...normallyEnabledExternalPluginIds,
+    ...maintenanceExternalPluginIds,
+  ]);
   if (externalPluginIds.length > 0) {
     const externalPluginIdSet = new Set(externalPluginIds);
     const ownedChannelIdsByPluginId = new Map(

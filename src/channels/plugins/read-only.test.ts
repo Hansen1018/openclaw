@@ -1236,7 +1236,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
-  it("loads explicitly scoped disabled external owners for maintenance", () => {
+  it("keeps untrusted explicitly scoped disabled external owners inert during maintenance", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
       pluginId: "external-chat-plugin",
       channelId: "external-chat",
@@ -1262,8 +1262,8 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       },
     );
 
-    expect(pluginIds(plugins)).toContain("external-chat");
-    expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(pluginIds(plugins)).not.toContain("external-chat");
+    expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
