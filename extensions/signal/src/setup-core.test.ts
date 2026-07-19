@@ -426,6 +426,77 @@ describe("signalSetupAdapter", () => {
     });
   });
 
+  it("keeps map-only named-account recovery from creating an implicit default transport", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            apiMode: "auto",
+            accounts: {
+              work: { account: "+15555550124", httpUrl: "http://work-native:8080" },
+              personal: {
+                account: "+15555550125",
+                httpUrl: "http://personal-container:8080",
+              },
+            },
+          },
+        },
+      } as never,
+      accountId: "default",
+      input: {
+        signalTransports: JSON.stringify({
+          work: { kind: "external-native", url: "http://work-native:8080" },
+          personal: { kind: "container", url: "http://personal-container:8080" },
+        }),
+      },
+    });
+
+    expect(next?.channels?.signal?.transport).toBeUndefined();
+    expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
+      kind: "external-native",
+      url: "http://work-native:8080",
+    });
+    expect(next?.channels?.signal?.accounts?.personal?.transport).toEqual({
+      kind: "container",
+      url: "http://personal-container:8080",
+    });
+  });
+
+  it("preserves a canonical sibling while recovering an inherited legacy endpoint", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            apiMode: "auto",
+            httpUrl: "http://shared-legacy:8080",
+            accounts: {
+              canonical: {
+                account: "+15555550124",
+                transport: { kind: "container", url: "http://canonical:8080" },
+              },
+              legacy: { account: "+15555550125" },
+            },
+          },
+        },
+      } as never,
+      accountId: "legacy",
+      input: {
+        signalTransports: JSON.stringify({
+          legacy: { kind: "external-native", url: "http://shared-legacy:8080" },
+        }),
+      },
+    });
+
+    expect(next?.channels?.signal?.accounts?.canonical?.transport).toEqual({
+      kind: "container",
+      url: "http://canonical:8080",
+    });
+    expect(next?.channels?.signal?.accounts?.legacy?.transport).toEqual({
+      kind: "external-native",
+      url: "http://shared-legacy:8080",
+    });
+  });
+
   it("validates the account transport recovery map", () => {
     expect(
       signalSetupAdapter.validateInput?.({

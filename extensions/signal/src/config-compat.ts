@@ -653,7 +653,7 @@ export function migrateLegacySignalTransportConfigSync(
       (normalizedAccountId
         ? selections.find((candidate) => candidate.accountId === normalizedAccountId)
         : undefined) ??
-      (entryUrl !== undefined
+      (entryUrl !== undefined && !isSignalTransportConfig(entry.transport)
         ? selections.find((candidate) => entryUrl === candidate.url)
         : undefined);
     if (selection) {

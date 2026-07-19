@@ -119,6 +119,17 @@ function mergeSignalTransportSelections(
   return [...merged.values()];
 }
 
+function hasSignalTargetSetupInput(input: ChannelSetupInput): boolean {
+  return Boolean(
+    input.signalTransport ||
+    normalizeOptionalString(input.signalNumber) ||
+    normalizeOptionalString(input.cliPath) ||
+    normalizeOptionalString(input.httpUrl) ||
+    normalizeOptionalString(input.httpHost) ||
+    normalizeOptionalString(input.httpPort),
+  );
+}
+
 export function normalizeSignalAccountInput(value: string | null | undefined): string | null {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -498,6 +509,18 @@ export const signalSetupAdapter: ChannelSetupAdapter = {
           transport: rootTransport ?? nestedDefaultTransport,
         })
       : recoveredCfg;
+    const targetSelected = transportSelections.some(
+      (selection) => normalizeAccountId(selection.accountId) === accountId,
+    );
+    if (
+      params.input.signalTransports !== undefined &&
+      !targetSelected &&
+      !hasSignalTargetSetupInput(params.input)
+    ) {
+      // A batch map can repair named accounts without selecting the CLI's implicit default.
+      // Do not turn that placeholder target into a new managed daemon as a side effect.
+      return cfg;
+    }
     const next = signalSetupAdapterBase.applyAccountConfig?.({ ...params, cfg, accountId }) ?? cfg;
     const configuredTransport = resolveConfiguredSignalTransport(next, accountId);
     if (configuredTransport && configuredTransport.kind !== "managed-native") {
