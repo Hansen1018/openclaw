@@ -619,7 +619,6 @@ describe("channelsAddCommand", () => {
     });
     const officialEntry: ChannelPluginCatalogEntry = {
       id: "signal",
-      pluginId: "signal",
       trustedSourceLinkedOfficialInstall: true,
       meta: officialPlugin.meta,
       setupCapabilities: { invalidConfigRecovery: true },

@@ -176,6 +176,10 @@ async function channelsAddCommandImpl(
   const recoveryChannelId = isShippedSetupRecoveryOwner(recoveryCatalogEntry)
     ? normalizeChannelId(recoveryCatalogEntry?.id ?? "")
     : undefined;
+  const recoveryCatalogPluginId = recoveryCatalogEntry?.pluginId?.trim();
+  const recoveryPluginId = recoveryChannelId
+    ? recoveryCatalogPluginId || recoveryCatalogEntry?.id.trim()
+    : undefined;
   const configSnapshot = await requireValidConfigFileSnapshot(
     runtime,
     recoveryChannelId
@@ -299,7 +303,10 @@ async function channelsAddCommandImpl(
     return;
   }
 
-  const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
+  const plugin = await loadScopedPlugin(
+    channel,
+    recoveringInvalidConfig ? recoveryPluginId : catalogEntry?.pluginId,
+  );
   if (!plugin?.setup?.applyAccountConfig) {
     runtime.error(
       `${formatUnsupportedChannelActionMessage({

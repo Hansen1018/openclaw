@@ -310,6 +310,20 @@ function signalAccountIds(entries: Record<string, unknown>[]): string[] {
     .map(([accountId]) => accountId);
 }
 
+function isDefaultSignalAccountId(accountId: string | undefined): boolean {
+  return Boolean(accountId?.trim()) && normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID;
+}
+
+function resolveSignalAccountKey(
+  accounts: Record<string, unknown>,
+  accountId: string,
+): string | undefined {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  return Object.keys(accounts).find(
+    (key) => Boolean(key.trim()) && normalizeAccountId(key) === normalizedAccountId,
+  );
+}
+
 function signalAccountIdForEntry(
   entries: Record<string, unknown>[],
   index: number,
@@ -322,7 +336,8 @@ function signalAccountIdForEntry(
 
 function nestedDefaultOwnsEffectiveTransport(entries: Record<string, unknown>[]): boolean {
   const accounts = isRecord(entries[0]?.accounts) ? entries[0].accounts : {};
-  const nestedDefault = accounts[DEFAULT_ACCOUNT_ID];
+  const nestedDefaultKey = resolveSignalAccountKey(accounts, DEFAULT_ACCOUNT_ID);
+  const nestedDefault = nestedDefaultKey ? accounts[nestedDefaultKey] : undefined;
   return Boolean(
     isRecord(nestedDefault) &&
     (isSignalTransportConfig(nestedDefault.transport) || hasLegacyFields(nestedDefault)),
@@ -339,7 +354,7 @@ function isDiscardedTransportEntry(entries: Record<string, unknown>[], index: nu
   // A canonical root transport owns the default account; a nested default's
   // retired endpoint fields are cleanup-only and must not block migration.
   return (
-    signalAccountIds(entries)[index - 1] === DEFAULT_ACCOUNT_ID &&
+    isDefaultSignalAccountId(signalAccountIds(entries)[index - 1]) &&
     isSignalTransportConfig(entries[0]?.transport)
   );
 }
@@ -366,11 +381,14 @@ export function clearLegacySignalTransportFieldsForAccount(params: {
   if (!isRecord(signal)) {
     return next;
   }
-  if (params.accountId === DEFAULT_ACCOUNT_ID) {
+  if (isDefaultSignalAccountId(params.accountId)) {
     clearLegacyTransportFields(signal);
     delete signal.apiMode;
     const accounts = isRecord(signal.accounts) ? signal.accounts : undefined;
-    const nestedDefault = accounts?.[DEFAULT_ACCOUNT_ID];
+    const nestedDefaultKey = accounts
+      ? resolveSignalAccountKey(accounts, DEFAULT_ACCOUNT_ID)
+      : undefined;
+    const nestedDefault = nestedDefaultKey ? accounts?.[nestedDefaultKey] : undefined;
     if (isRecord(nestedDefault)) {
       // Setup writes the implicit default transport at the channel root.
       // Remove a nested copy so it cannot shadow the canonical write.
@@ -380,7 +398,8 @@ export function clearLegacySignalTransportFieldsForAccount(params: {
     return next;
   }
   const accounts = isRecord(signal.accounts) ? signal.accounts : undefined;
-  const account = accounts?.[params.accountId];
+  const accountKey = accounts ? resolveSignalAccountKey(accounts, params.accountId) : undefined;
+  const account = accountKey ? accounts?.[accountKey] : undefined;
   if (isRecord(account)) {
     clearLegacyTransportFields(account);
   }
@@ -394,7 +413,9 @@ function allocateMigratedManagedPorts(params: {
   const reservedPorts = new Set<number>();
   const rootIsAccount = hasRootSignalAccount(params.entries);
   const accountIds = signalAccountIds(params.entries);
-  const nestedDefaultOffset = accountIds.indexOf(DEFAULT_ACCOUNT_ID);
+  const nestedDefaultOffset = accountIds.findIndex((accountId) =>
+    isDefaultSignalAccountId(accountId),
+  );
   const canonicalDefaultIndex = isSignalTransportConfig(params.entries[0]?.transport)
     ? 0
     : nestedDefaultOffset >= 0
@@ -465,7 +486,7 @@ function applyMigratedSignalTransports(params: {
     : undefined;
   for (const [index, entry] of nextEntries.entries()) {
     const accountId = index === 0 ? undefined : accountIds[index - 1];
-    if (accountId === DEFAULT_ACCOUNT_ID) {
+    if (isDefaultSignalAccountId(accountId)) {
       const defaultTransport = canonicalRootTransport ?? params.transports[index];
       if (defaultTransport) {
         nextSignal.transport = defaultTransport;

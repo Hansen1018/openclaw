@@ -201,6 +201,30 @@ describe("signal transport compatibility", () => {
     expect(result.config.channels?.signal?.accounts?.default).not.toHaveProperty("transport");
   });
 
+  it("uses a case-preserving accounts.Default endpoint override during migration", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        account: "+15555550123",
+        httpUrl: "http://shadowed-root:8080",
+        autoStart: false,
+        accounts: {
+          Default: {
+            account: "+15555550124",
+            httpUrl: "http://active-default:8181",
+            autoStart: false,
+          },
+        },
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toEqual({
+      kind: "external-native",
+      url: "http://active-default:8181",
+    });
+    expect(result.config.channels?.signal?.accounts?.Default).not.toHaveProperty("transport");
+  });
+
   it("does not probe a shadowed root endpoint during async migration", async () => {
     const detect = vi.fn(async ({ url }: { url: string }) => ({
       kind: "external-native" as const,
