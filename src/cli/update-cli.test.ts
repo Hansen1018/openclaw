@@ -437,6 +437,7 @@ const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
 const postCorePluginConvergence = await import("./update-cli/post-core-plugin-convergence.js");
+const { completePostCorePluginUpdate } = await import("./update-cli/update-command-post-core.js");
 const runPostCorePluginConvergenceSpy = vi.spyOn(
   postCorePluginConvergence,
   "runPostCorePluginConvergence",
@@ -1572,6 +1573,37 @@ describe("update-cli", () => {
     expect(runExec).toHaveBeenCalledTimes(1);
     expect(strictValidationEnv).toBe("0");
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("runs the fresh plugin doctor with the selected Node runner", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+
+    await completePostCorePluginUpdate({
+      root: "/tmp/openclaw-updated-root",
+      pluginUpdate: {
+        status: "ok",
+        changed: true,
+        warnings: [],
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: { changed: true, outcomes: [] },
+        integrityDrifts: [],
+      },
+      freshDoctorRequired: true,
+      yes: true,
+      json: true,
+      timeoutMs: 30_000,
+      nodeRunner: "/opt/openclaw-service/bin/node",
+    });
+
+    expect(vi.mocked(runExec).mock.calls[0]?.[0]).toBe("/opt/openclaw-service/bin/node");
   });
 
   it("fails the update when the fresh process exits non-zero", async () => {

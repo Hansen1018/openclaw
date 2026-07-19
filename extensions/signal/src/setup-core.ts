@@ -36,6 +36,7 @@ import {
   writeSignalAccountTransport,
 } from "./setup-transport.js";
 import { isValidSignalManagedNativePort } from "./transport-policy.js";
+import { normalizeSignalTransportUrl } from "./transport-url.js";
 
 const t = createSetupTranslator();
 
@@ -45,6 +46,78 @@ const MAX_E164_DIGITS = 15;
 const DIGITS_ONLY = /^\d+$/;
 const INVALID_SIGNAL_ACCOUNT_ERROR =
   "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
+
+type ExplicitSignalTransportSelection = {
+  accountId: string;
+  kind: "external-native" | "container";
+  url: string;
+};
+
+function parseSignalTransportSelections(value: unknown): ExplicitSignalTransportSelection[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("Signal --signal-transports must be a non-empty JSON object.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("Signal --signal-transports must be valid JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Signal --signal-transports must be a JSON object keyed by account id.");
+  }
+  const selections: ExplicitSignalTransportSelection[] = [];
+  const accountIds = new Set<string>();
+  for (const [rawAccountId, rawSelection] of Object.entries(parsed)) {
+    const accountId = normalizeAccountId(rawAccountId);
+    if (
+      !rawAccountId.trim() ||
+      accountId === "__proto__" ||
+      accountId === "prototype" ||
+      accountId === "constructor"
+    ) {
+      throw new Error(`Signal --signal-transports has an invalid account id: ${rawAccountId}`);
+    }
+    if (accountIds.has(accountId)) {
+      throw new Error(`Signal --signal-transports repeats normalized account id: ${accountId}`);
+    }
+    if (!rawSelection || typeof rawSelection !== "object" || Array.isArray(rawSelection)) {
+      throw new Error(`Signal transport selection for account "${accountId}" must be an object.`);
+    }
+    const selection = rawSelection as Record<string, unknown>;
+    if (selection.kind !== "external-native" && selection.kind !== "container") {
+      throw new Error(
+        `Signal transport selection for account "${accountId}" must use external-native or container.`,
+      );
+    }
+    if (typeof selection.url !== "string") {
+      throw new Error(`Signal transport selection for account "${accountId}" requires a URL.`);
+    }
+    selections.push({
+      accountId,
+      kind: selection.kind,
+      url: normalizeSignalTransportUrl(selection.url),
+    });
+    accountIds.add(accountId);
+  }
+  if (selections.length === 0) {
+    throw new Error("Signal --signal-transports must select at least one account.");
+  }
+  return selections;
+}
+
+function mergeSignalTransportSelections(
+  selections: readonly ExplicitSignalTransportSelection[],
+): ExplicitSignalTransportSelection[] {
+  const merged = new Map<string, ExplicitSignalTransportSelection>();
+  for (const selection of selections) {
+    merged.set(normalizeAccountId(selection.accountId), selection);
+  }
+  return [...merged.values()];
+}
 
 export function normalizeSignalAccountInput(value: string | null | undefined): string | null {
   const trimmed = normalizeOptionalString(value);
@@ -144,7 +217,9 @@ function resolveSignalSetupAccount(params: {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
-  return resolveSignalAccount({ cfg: params.cfg, accountId }).config.account;
+  const signal = params.cfg.channels?.signal;
+  const account = resolveAccountEntry(signal?.accounts, accountId);
+  return account?.account ?? signal?.account;
 }
 
 export async function prepareSignalSetupInput(params: {
@@ -322,6 +397,12 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter({
       if (input.signalTransport && !input.httpUrl) {
         return "Signal --signal-transport requires --http-url.";
       }
+      let transportSelections: ExplicitSignalTransportSelection[];
+      try {
+        transportSelections = parseSignalTransportSelections(input.signalTransports);
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
       if (input.httpPort !== undefined && !isValidSignalManagedNativePort(Number(input.httpPort))) {
         return "Signal --http-port must be an integer between 1 and 65535.";
       }
@@ -332,14 +413,32 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter({
       ) {
         return "Signal container transport requires --signal-number or an existing account.";
       }
+      for (const selection of transportSelections) {
+        if (
+          selection.kind === "container" &&
+          !(
+            normalizeAccountId(selection.accountId) === normalizeAccountId(accountId) &&
+            normalizeSignalAccountInput(input.signalNumber)
+          ) &&
+          !normalizeSignalAccountInput(
+            resolveSignalSetupAccount({
+              cfg,
+              accountId: selection.accountId,
+            }),
+          )
+        ) {
+          return `Signal container transport for account "${selection.accountId}" requires an existing account.`;
+        }
+      }
       if (
         !input.signalNumber &&
         !input.httpUrl &&
         !input.httpHost &&
         !input.httpPort &&
-        !input.cliPath
+        !input.cliPath &&
+        transportSelections.length === 0
       ) {
-        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
+        return "Signal requires --signal-number, --signal-transports, or --http-url/--http-host/--http-port/--cli-path.";
       }
       return null;
     },
@@ -356,17 +455,25 @@ export const signalSetupAdapter: ChannelSetupAdapter = {
     await prepareSignalSetupInput({ cfg, accountId, input }),
   applyAccountConfig: (params) => {
     const accountId = normalizeAccountId(params.accountId);
+    const transportSelections = mergeSignalTransportSelections([
+      ...parseSignalTransportSelections(params.input.signalTransports),
+      ...(params.input.signalTransport && params.input.httpUrl
+        ? [
+            {
+              accountId,
+              kind: params.input.signalTransport,
+              url: normalizeSignalTransportUrl(params.input.httpUrl),
+            },
+          ]
+        : []),
+    ]);
     // An explicit protocol choice may recover the selected endpoint and siblings that inherit
     // that same endpoint. Never guess the protocol for unrelated account endpoints.
     const recovery = migrateLegacySignalTransportConfigSync(
       params.cfg,
-      params.input.signalTransport
+      transportSelections.length > 0
         ? {
-            ambiguousTransportSelection: {
-              accountId,
-              kind: params.input.signalTransport,
-              ...(params.input.httpUrl ? { url: params.input.httpUrl } : {}),
-            },
+            ambiguousTransportSelections: transportSelections,
           }
         : undefined,
     );

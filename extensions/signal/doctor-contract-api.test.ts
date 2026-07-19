@@ -742,7 +742,7 @@ describe("signal transport compatibility", () => {
     expect(result.config).toBe(cfg);
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
-      '- channels.signal: legacy auto transport is ambiguous while its endpoint is unavailable; bring the endpoint online, or choose the account transport explicitly with "openclaw channels add --channel signal --http-url <url> --signal-transport external-native|container".',
+      '- channels.signal: legacy auto transport is ambiguous while its endpoint is unavailable; bring the endpoint online, choose one account transport explicitly with "openclaw channels add --channel signal --account <id> --http-url <url> --signal-transport external-native|container", or recover distinct endpoints atomically with --signal-transports <json>.',
     ]);
   });
 });

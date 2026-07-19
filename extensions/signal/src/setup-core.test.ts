@@ -356,6 +356,54 @@ describe("signalSetupAdapter", () => {
     );
   });
 
+  it("atomically recovers distinct offline endpoints from an account transport map", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            apiMode: "auto",
+            accounts: {
+              work: { account: "+15555550124", httpUrl: "http://work-native:8080" },
+              personal: {
+                account: "+15555550125",
+                httpUrl: "http://personal-container:8080",
+              },
+            },
+          },
+        },
+      } as never,
+      accountId: "work",
+      input: {
+        signalTransports: JSON.stringify({
+          work: { kind: "external-native", url: "http://work-native:8080" },
+          personal: { kind: "container", url: "http://personal-container:8080" },
+        }),
+      },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
+      kind: "external-native",
+      url: "http://work-native:8080",
+    });
+    expect(next?.channels?.signal?.accounts?.personal?.transport).toEqual({
+      kind: "container",
+      url: "http://personal-container:8080",
+    });
+    expect(next?.channels?.signal).not.toHaveProperty("apiMode");
+    expect(next?.channels?.signal?.accounts?.work).not.toHaveProperty("httpUrl");
+    expect(next?.channels?.signal?.accounts?.personal).not.toHaveProperty("httpUrl");
+  });
+
+  it("validates the account transport recovery map", () => {
+    expect(
+      signalSetupAdapter.validateInput?.({
+        cfg: {},
+        accountId: "default",
+        input: { signalTransports: '{"work":{"kind":"auto"}}' },
+      }),
+    ).toBe('Signal transport selection for account "work" must use external-native or container.');
+  });
+
   it("atomically recovers every legacy account from an explicit transport selection", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {

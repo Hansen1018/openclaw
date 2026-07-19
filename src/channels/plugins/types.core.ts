@@ -107,6 +107,7 @@ export type ChannelSetupInput = {
   appToken?: string;
   signalNumber?: string;
   signalTransport?: "external-native" | "container";
+  signalTransports?: string;
   cliPath?: string;
   dbPath?: string;
   service?: "imessage" | "sms" | "auto";

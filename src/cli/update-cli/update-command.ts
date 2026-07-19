@@ -1365,6 +1365,7 @@ async function updateCommandInternal(
         yes: opts.yes === true,
         json: opts.json === true,
         timeoutMs: updateStepTimeoutMs,
+        ...(managedServiceNodeRunner ? { nodeRunner: managedServiceNodeRunner } : {}),
       });
       postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
       postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;

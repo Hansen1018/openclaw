@@ -18,6 +18,7 @@ export async function runPostPluginDoctorInFreshProcess(params: {
   yes: boolean;
   json: boolean;
   timeoutMs: number;
+  nodeRunner?: string;
 }): Promise<void> {
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
@@ -31,7 +32,7 @@ export async function runPostPluginDoctorInFreshProcess(params: {
     "--no-workspace-suggestions",
     ...(params.yes ? ["--yes"] : []),
   ];
-  const result = await runExec(resolveNodeRunner(), args, {
+  const result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
     cwd: params.root,
     timeoutMs: params.timeoutMs,
     maxBuffer: 4 * 1024 * 1024,

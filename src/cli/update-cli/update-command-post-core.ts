@@ -180,6 +180,7 @@ export async function completePostCorePluginUpdate(params: {
   yes: boolean;
   json: boolean;
   timeoutMs: number;
+  nodeRunner?: string;
 }): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
   configSnapshot: ConfigFileSnapshot;
@@ -193,6 +194,7 @@ export async function completePostCorePluginUpdate(params: {
       yes: params.yes,
       json: params.json,
       timeoutMs: params.timeoutMs,
+      ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
     });
   }
 
