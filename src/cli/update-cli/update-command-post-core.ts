@@ -70,7 +70,10 @@ import {
   restoreDroppedPreUpdateChannels,
   writePostCoreSourceConfigFile,
 } from "./update-command-config.js";
-import { runPostPluginDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
+import {
+  applyFreshPostPluginDoctor,
+  applyPostPluginConfigValidation,
+} from "./update-command-fresh-doctor.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -189,8 +192,9 @@ export async function completePostCorePluginUpdate(params: {
   if (pluginUpdate.status !== "error" && params.freshDoctorRequired) {
     // Plugin upgrades can replace the migration owner loaded by the first doctor pass. Complete
     // the updated-owner pass before publishing success to a waiting parent update process.
-    await runPostPluginDoctorInFreshProcess({
+    pluginUpdate = await applyFreshPostPluginDoctor({
       root: params.root,
+      pluginUpdate,
       yes: params.yes,
       json: params.json,
       timeoutMs: params.timeoutMs,
@@ -201,22 +205,7 @@ export async function completePostCorePluginUpdate(params: {
   // Re-parse outside the update-only schema window. A plugin migration that did not converge must
   // fail finalization instead of letting legacy config reach the restarted gateway.
   const configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());
-  if (pluginUpdate.status !== "error" && !configSnapshot.valid) {
-    pluginUpdate = {
-      ...pluginUpdate,
-      status: "error",
-      reason: "post-plugin-doctor-invalid-config",
-      warnings: [
-        ...(pluginUpdate.warnings ?? []),
-        {
-          reason: "Config remained invalid after updated plugin migrations.",
-          message:
-            "Post-update plugin migration did not produce a valid config; refusing to restart.",
-          guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
-        },
-      ],
-    };
-  }
+  pluginUpdate = applyPostPluginConfigValidation(pluginUpdate, configSnapshot.valid);
   return { pluginUpdate, configSnapshot };
 }
 

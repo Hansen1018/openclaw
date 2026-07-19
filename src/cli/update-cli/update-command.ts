@@ -97,6 +97,7 @@ import {
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
+import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-fresh-doctor.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -1401,6 +1402,14 @@ async function updateCommandInternal(
       result: resultWithPostUpdate,
       jsonMode: Boolean(opts.json),
     });
+    // A fresh-doctor execution failure does not prove the migrated config is unsafe. Restore the
+    // service that this update stopped; config-invalid plugin failures intentionally stay down.
+    if (postCorePluginUpdate.reason === POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON) {
+      await maybeRestartServiceAfterFailedMutableUpdate({
+        preManagedServiceStop,
+        jsonMode: Boolean(opts.json),
+      });
+    }
     if (opts.json) {
       defaultRuntime.writeJson(resultWithPostUpdate);
     } else {

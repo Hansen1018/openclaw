@@ -1606,6 +1606,72 @@ describe("update-cli", () => {
     expect(vi.mocked(runExec).mock.calls[0]?.[0]).toBe("/opt/openclaw-service/bin/node");
   });
 
+  it("returns a structured error when the fresh plugin doctor cannot run", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    vi.mocked(runExec).mockRejectedValueOnce(new Error("doctor process failed"));
+
+    const result = await completePostCorePluginUpdate({
+      root: "/tmp/openclaw-updated-root",
+      pluginUpdate: {
+        status: "ok",
+        changed: true,
+        warnings: [],
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: { changed: true, outcomes: [] },
+        integrityDrifts: [],
+      },
+      freshDoctorRequired: true,
+      yes: true,
+      json: true,
+      timeoutMs: 30_000,
+    });
+
+    expect(result.pluginUpdate).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-execution-failed",
+    });
+    expect(result.pluginUpdate.warnings?.at(-1)?.reason).toContain("doctor process failed");
+  });
+
+  it("keeps an invalid config authoritative after a fresh plugin doctor failure", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    vi.mocked(runExec).mockRejectedValueOnce(new Error("doctor process failed"));
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
+      ...baseSnapshot,
+      valid: false,
+      issues: [{ path: "channels.signal.httpUrl", message: "legacy Signal transport field" }],
+    } as ConfigFileSnapshot);
+
+    const result = await completePostCorePluginUpdate({
+      root: "/tmp/openclaw-updated-root",
+      pluginUpdate: {
+        status: "ok",
+        changed: true,
+        warnings: [],
+        integrityDrifts: [],
+      },
+      freshDoctorRequired: true,
+      yes: true,
+      json: true,
+      timeoutMs: 30_000,
+    });
+
+    expect(result.pluginUpdate).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+    });
+  });
+
   it("fails the update when the fresh process exits non-zero", async () => {
     setupUpdatedRootRefresh();
     spawn.mockImplementationOnce(() => {
@@ -4463,6 +4529,39 @@ describe("update-cli", () => {
     expect(serviceStop).toHaveBeenCalledTimes(1);
     expect(serviceRestart).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("restarts a stopped git service when the fresh plugin doctor cannot run", async () => {
+    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    mockGitUpdateAfterMutation();
+    updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: true,
+      config: baseConfig,
+      outcomes: [],
+    });
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    vi.mocked(runExec).mockRejectedValueOnce(new Error("doctor process failed"));
+
+    await updateCommand({ yes: true });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 

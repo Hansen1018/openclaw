@@ -8,10 +8,13 @@ import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveNodeRunner } from "./shared.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service.js";
+
+export const POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON = "post-plugin-doctor-execution-failed";
 
 export async function runPostPluginDoctorInFreshProcess(params: {
   root: string;
@@ -53,4 +56,59 @@ export async function runPostPluginDoctorInFreshProcess(params: {
       defaultRuntime.error(result.stderr.trimEnd());
     }
   }
+}
+
+export async function applyFreshPostPluginDoctor(params: {
+  root: string;
+  pluginUpdate: PostCorePluginUpdateResult;
+  yes: boolean;
+  json: boolean;
+  timeoutMs: number;
+  nodeRunner?: string;
+}): Promise<PostCorePluginUpdateResult> {
+  try {
+    await runPostPluginDoctorInFreshProcess(params);
+    return params.pluginUpdate;
+  } catch (err) {
+    return {
+      ...params.pluginUpdate,
+      status: "error",
+      reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+      warnings: [
+        ...(params.pluginUpdate.warnings ?? []),
+        {
+          reason: String(err),
+          message: "Updated plugin migrations could not be run in a fresh process.",
+          guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
+        },
+      ],
+    };
+  }
+}
+
+export function applyPostPluginConfigValidation(
+  pluginUpdate: PostCorePluginUpdateResult,
+  configValid: boolean,
+): PostCorePluginUpdateResult {
+  if (
+    configValid ||
+    (pluginUpdate.status === "error" &&
+      pluginUpdate.reason !== POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON)
+  ) {
+    return pluginUpdate;
+  }
+  return {
+    ...pluginUpdate,
+    status: "error",
+    reason: "post-plugin-doctor-invalid-config",
+    warnings: [
+      ...(pluginUpdate.warnings ?? []),
+      {
+        reason: "Config remained invalid after updated plugin migrations.",
+        message:
+          "Post-update plugin migration did not produce a valid config; refusing to restart.",
+        guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
+      },
+    ],
+  };
 }
