@@ -227,6 +227,25 @@ describe("resolveSignalAccount", () => {
     );
   });
 
+  it("rejects an explicit managed port used by its own independent local endpoint", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          account: "+15555550123",
+          transport: {
+            kind: "managed-native",
+            url: "https://127.0.0.1:8181",
+            httpPort: 8181,
+          },
+        },
+      },
+    } as never;
+
+    expect(() => resolveSignalAccount({ cfg })).toThrow(
+      'Signal managed native account "default" binds port 8181, which conflicts with its local transport endpoint.',
+    );
+  });
+
   it("does not let an unconfigured placeholder consume a managed port", () => {
     const cfg = {
       channels: {

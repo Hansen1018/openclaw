@@ -93,6 +93,15 @@ function resolveSignalManagedNativePort(params: {
 }): number {
   if (params.transport?.kind === "managed-native" && params.transport.httpPort !== undefined) {
     const explicitPort = params.transport.httpPort;
+    if (
+      params.transport.url &&
+      !isSignalManagedNativeConnectionUrlForBind(params.transport) &&
+      resolveLocalSignalTransportPort(params.transport.url) === explicitPort
+    ) {
+      throw new Error(
+        `Signal managed native account "${params.accountId}" binds port ${explicitPort}, which conflicts with its local transport endpoint. Assign a distinct transport.httpPort.`,
+      );
+    }
     for (const accountId of listSignalAccountIds(params.cfg)) {
       if (normalizeAccountId(accountId) === params.accountId) {
         continue;
