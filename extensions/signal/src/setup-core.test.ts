@@ -9,6 +9,10 @@ import {
 import { signalSetupWizard } from "./setup-surface.js";
 
 describe("signalSetupAdapter", () => {
+  it("keeps canonical default account ownership at the channel root", () => {
+    expect(signalSetupAdapter.skipSingleAccountPromotion).toBe(true);
+  });
+
   it("repairs a duplicate explicit managed port before runtime resolution", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {

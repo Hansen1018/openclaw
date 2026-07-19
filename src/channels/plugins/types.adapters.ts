@@ -116,6 +116,7 @@ export type ChannelSetupAdapter = {
     accountId: string;
     input: ChannelSetupInput;
   }) => string | null;
+  skipSingleAccountPromotion?: boolean;
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
   resolveSingleAccountPromotionTarget?: (params: {

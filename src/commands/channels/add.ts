@@ -357,7 +357,7 @@ async function channelsAddCommandImpl(
 
   const prevConfig = nextConfig;
 
-  if (accountId !== DEFAULT_ACCOUNT_ID) {
+  if (accountId !== DEFAULT_ACCOUNT_ID && plugin.setup.skipSingleAccountPromotion !== true) {
     nextConfig = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: nextConfig,
       channelKey: channel,

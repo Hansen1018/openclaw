@@ -352,6 +352,9 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter({
 
 export const signalSetupAdapter: ChannelSetupAdapter = {
   ...signalSetupAdapterBase,
+  // Signal's canonical default account stays at the channel root with its transport.
+  // Generic promotion would split that owner pair before a named-account write.
+  skipSingleAccountPromotion: true,
   prepareAccountConfigInput: async ({ cfg, accountId, input }) =>
     await prepareSignalSetupInput({ cfg, accountId, input }),
   applyAccountConfig: (params) => {

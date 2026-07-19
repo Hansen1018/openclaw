@@ -1456,6 +1456,63 @@ describe("channelsAddCommand", () => {
     expect(writtenChannel("signal")).toEqual({ transportKind: "container" });
   });
 
+  it("preserves owner-managed root config while adding a named account", async () => {
+    const config = {
+      channels: {
+        signal: {
+          account: "+15555550111",
+          transport: { kind: "managed-native", httpPort: 8080 },
+          accounts: {
+            work: {
+              account: "+15555550222",
+              transport: { kind: "managed-native", httpPort: 8081 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const plugin = createSignalPlugin(undefined, {
+      skipSingleAccountPromotion: true,
+      applyAccountConfig: ({ cfg, accountId, input }) => ({
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          signal: {
+            ...cfg.channels?.signal,
+            accounts: {
+              ...cfg.channels?.signal?.accounts,
+              [accountId]: { account: input.signalNumber },
+            },
+          },
+        },
+      }),
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+
+    await channelsAddCommand(
+      { channel: "signal", account: "personal", signalNumber: "+15555550333" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(writtenChannel("signal")).toEqual({
+      account: "+15555550111",
+      transport: { kind: "managed-native", httpPort: 8080 },
+      accounts: {
+        work: {
+          account: "+15555550222",
+          transport: { kind: "managed-native", httpPort: 8081 },
+        },
+        personal: { account: "+15555550333" },
+      },
+    });
+  });
+
   it("rechecks persistent authority before direct account post-setup hooks", async () => {
     const afterAccountConfigWritten = vi.fn().mockResolvedValue(undefined);
     const beforePersistentEffect = vi
