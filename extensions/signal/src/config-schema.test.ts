@@ -90,6 +90,7 @@ describe("signal groups schema", () => {
 
   it("accepts account-owned transport configurations", () => {
     expectValidSignalConfig({
+      account: "+15555550123",
       transport: {
         kind: "managed-native",
         cliPath: "/opt/signal-cli",
@@ -109,6 +110,46 @@ describe("signal groups schema", () => {
             kind: "container",
             url: "http://signal-container:8080",
           },
+        },
+      },
+    });
+  });
+
+  it("rejects a root container transport without an effective account", () => {
+    const issues = expectInvalidSignalConfig({
+      transport: {
+        kind: "container",
+        url: "http://signal-container:8080",
+      },
+    });
+
+    expect(issues.map((issue) => issue.path.join("."))).toContain("account");
+  });
+
+  it("rejects a named container transport without an inherited or owned account", () => {
+    const issues = expectInvalidSignalConfig({
+      accounts: {
+        work: {
+          transport: {
+            kind: "container",
+            url: "http://signal-container:8080",
+          },
+        },
+      },
+    });
+
+    expect(issues.map((issue) => issue.path.join("."))).toContain("accounts.work.account");
+  });
+
+  it("accepts a default-account number stored beside a root container transport", () => {
+    expectValidSignalConfig({
+      transport: {
+        kind: "container",
+        url: "http://signal-container:8080",
+      },
+      accounts: {
+        Default: {
+          account: "+15555550123",
         },
       },
     });
