@@ -204,6 +204,56 @@ describe("resolveSignalAccount", () => {
     );
   });
 
+  it("does not let a disabled account block an active managed port", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            dormant: {
+              enabled: false,
+              account: "+15555550123",
+              transport: { kind: "managed-native", httpPort: 8181 },
+            },
+            work: {
+              account: "+15555550124",
+              transport: { kind: "managed-native", httpPort: 8181 },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
+      kind: "managed-native",
+      httpPort: 8181,
+    });
+  });
+
+  it("does not reserve an implicit managed port for a disabled account", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            dormant: {
+              enabled: false,
+              account: "+15555550123",
+              transport: { kind: "managed-native" },
+            },
+            work: {
+              account: "+15555550124",
+              transport: { kind: "managed-native" },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
+      kind: "managed-native",
+      httpPort: 8080,
+    });
+  });
+
   it("rejects an explicit managed port used by a local external endpoint", () => {
     const cfg = {
       channels: {

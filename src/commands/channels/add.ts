@@ -241,6 +241,9 @@ async function channelsAddCommandImpl(
       runtime,
       channel: channelId,
       ...(pluginId ? { pluginId } : {}),
+      ...(recoveringInvalidConfig && recoveryCatalogEntry
+        ? { trustedCatalogOwner: recoveryCatalogEntry }
+        : {}),
       workspaceDir: resolveWorkspaceDir(),
       forceSetupOnlyChannelPlugins: true,
     });

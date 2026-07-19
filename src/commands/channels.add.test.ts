@@ -658,7 +658,11 @@ describe("channelsAddCommand", () => {
 
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "signal", pluginId: "signal" }),
+      expect.objectContaining({
+        channel: "signal",
+        pluginId: "signal",
+        trustedCatalogOwner: officialEntry,
+      }),
     );
     expect(shadowApplyAccountConfig).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);

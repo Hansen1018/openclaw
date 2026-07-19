@@ -86,11 +86,21 @@ function isSignalAccountConfigured(config: SignalAccountConfig): boolean {
   return Boolean(normalizeOptionalString(config.account) || config.transport);
 }
 
+function isSignalAccountEnabled(cfg: OpenClawConfig, config: SignalAccountConfig): boolean {
+  return cfg.channels?.signal?.enabled !== false && config.enabled !== false;
+}
+
 function resolveSignalManagedNativePort(params: {
   cfg: OpenClawConfig;
   accountId: string;
+  accountConfig: SignalAccountConfig;
   transport: SignalTransportConfig | undefined;
 }): number {
+  if (!isSignalAccountEnabled(params.cfg, params.accountConfig)) {
+    return params.transport?.kind === "managed-native" && params.transport.httpPort !== undefined
+      ? params.transport.httpPort
+      : DEFAULT_SIGNAL_MANAGED_NATIVE_PORT;
+  }
   if (params.transport?.kind === "managed-native" && params.transport.httpPort !== undefined) {
     const explicitPort = params.transport.httpPort;
     if (
@@ -107,7 +117,10 @@ function resolveSignalManagedNativePort(params: {
         continue;
       }
       const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
-      if (!isSignalAccountConfigured(accountConfig)) {
+      if (
+        !isSignalAccountConfigured(accountConfig) ||
+        !isSignalAccountEnabled(params.cfg, accountConfig)
+      ) {
         continue;
       }
       const transport = accountConfig.transport;
@@ -142,7 +155,10 @@ function resolveSignalManagedNativePort(params: {
   // Independent account resolution must produce the same collision-free daemon binds.
   for (const accountId of listSignalAccountIds(params.cfg)) {
     const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
-    if (!isSignalAccountConfigured(accountConfig)) {
+    if (
+      !isSignalAccountConfigured(accountConfig) ||
+      !isSignalAccountEnabled(params.cfg, accountConfig)
+    ) {
       continue;
     }
     const transport = accountConfig.transport;
@@ -227,7 +243,12 @@ export function resolveSignalAccount(params: {
   const enabled = baseEnabled && accountEnabled;
   const transport = resolveSignalTransport(
     merged.transport,
-    resolveSignalManagedNativePort({ cfg: params.cfg, accountId, transport: merged.transport }),
+    resolveSignalManagedNativePort({
+      cfg: params.cfg,
+      accountId,
+      accountConfig: merged,
+      transport: merged.transport,
+    }),
   );
   const baseUrl = transport.baseUrl;
   const configured = isSignalAccountConfigured(merged);
