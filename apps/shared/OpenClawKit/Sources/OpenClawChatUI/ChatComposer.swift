@@ -355,6 +355,9 @@ struct OpenClawChatComposer: View {
         HStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 5) {
+                    if self.viewModel.sessionBranches.count > 1 {
+                        self.branchMenu
+                    }
                     if self.showsSessionSwitcher {
                         self.sessionPicker
                         if self.viewModel.showsThinkingPicker {
@@ -582,6 +585,61 @@ struct OpenClawChatComposer: View {
         .help("Thread")
     }
 
+    private var branchMenu: some View {
+        Menu {
+            ForEach(self.viewModel.sessionBranches) { branch in
+                Button {
+                    guard !branch.active else { return }
+                    Task { await self.viewModel.switchToBranch(branch.leafEntryId) }
+                } label: {
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(self.branchTitle(branch))
+                                .font(OpenClawChatTypography.captionSemiBold)
+                            Text(self.branchMetadata(branch))
+                                .font(OpenClawChatTypography.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if branch.active {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+                .disabled(branch.active)
+            }
+        } label: {
+            Image(systemName: "arrow.triangle.branch")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Branches")
+        .accessibilityLabel("Branches")
+        .disabled(self.messageSessionActionsDisabled)
+    }
+
+    private func branchTitle(_ branch: OpenClawChatSessionBranch) -> String {
+        let headline = branch.headline.trimmingCharacters(in: .whitespacesAndNewlines)
+        return headline.isEmpty ? String(localized: "Untitled branch") : headline
+    }
+
+    private func branchMetadata(_ branch: OpenClawChatSessionBranch) -> String {
+        var parts = [String(
+            format: String(localized: "%@ messages"),
+            branch.messageCount.formatted())]
+        if let updatedAt = branch.updatedAt,
+           let date = try? Date(updatedAt, strategy: .iso8601)
+        {
+            parts.append(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var messageSessionActionsDisabled: Bool {
+        self.viewModel.hasBlockingRunActivity ||
+            self.viewModel.isSending ||
+            self.viewModel.isAborting
+    }
+
     @ViewBuilder
     private var attachmentPicker: some View {
         #if os(macOS)
@@ -750,6 +808,10 @@ struct OpenClawChatComposer: View {
     private var cleanEditor: some View {
         HStack(alignment: .center, spacing: 4) {
             self.cleanAttachmentMenu
+
+            if self.viewModel.sessionBranches.count > 1 {
+                self.branchMenu
+            }
 
             self.editorOverlay
                 .frame(maxWidth: .infinity, minHeight: self.cleanControlHeight, alignment: .leading)

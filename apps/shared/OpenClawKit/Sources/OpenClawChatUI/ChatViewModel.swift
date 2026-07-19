@@ -80,6 +80,8 @@ public final class OpenClawChatViewModel {
     /// refetch; catalog-only changes (e.g. creating an empty group) alter no
     /// session rows and would otherwise stay stale until reconnect.
     public internal(set) var sessionGroupsRevision = 0
+    public internal(set) var sessionBranches: [OpenClawChatSessionBranch] = []
+    public internal(set) var isLoadingSessionBranches = false
 
     /// True when this view model owns a gateway-scoped durable text outbox.
     public var supportsOfflineTextOutbox: Bool {
@@ -801,6 +803,7 @@ extension OpenClawChatViewModel {
             historyRequest: historyRequest)
         paintFromCacheIfNeeded(session: context.session)
         restoreOutboxMessages(session: context.session)
+        Task { [weak self] in await self?.refreshSessionBranches() }
         self.bootstrapTask = Task { [weak self] in
             guard let self else { return }
             await self.bootstrap(context: context)
@@ -1141,6 +1144,8 @@ extension OpenClawChatViewModel {
         clearPlan()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         resetSlashCommandCatalog()
+        self.sessionBranches = []
+        self.isLoadingSessionBranches = false
         clearPendingRuns(reason: nil)
     }
 

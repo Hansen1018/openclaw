@@ -2313,6 +2313,142 @@
         }
       }
     },
+    "%@ messages": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ messages"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%@ messages"
+          }
+        }
+      }
+    },
     "%@ min": {
       "localizations": {
         "en": {
@@ -24205,6 +24341,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Gren"
+          }
+        }
+      }
+    },
+    "Branches": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Branches"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Branches"
           }
         }
       }
@@ -185637,6 +185909,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Osparade ändringar"
+          }
+        }
+      }
+    },
+    "Untitled branch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Untitled branch"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Untitled branch"
           }
         }
       }

@@ -386,10 +386,61 @@ extension OpenClawChatViewModel {
             self.input = result.editorText ?? ""
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
+            guard self.isCurrentSession(initiatingSession) else { return }
+            await self.refreshSessionBranches()
         } catch {
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.rewind failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    public func refreshSessionBranches() async {
+        guard !self.isLoadingSessionBranches else { return }
+        let session = self.currentSessionSnapshot()
+        self.isLoadingSessionBranches = true
+        defer {
+            if self.isCurrentSession(session) {
+                self.isLoadingSessionBranches = false
+            }
+        }
+        do {
+            let response = try await self.transport.listSessionBranches(sessionKey: session.key)
+            guard self.isCurrentSession(session) else { return }
+            self.sessionBranches = response.branches
+        } catch {
+            guard self.isCurrentSession(session) else { return }
+            self.sessionBranches = []
+            chatSessionActionsLogger.debug(
+                "sessions.branches.list failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    public func switchToBranch(_ leafEntryId: String) async {
+        let normalizedLeafEntryID = leafEntryId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedLeafEntryID.isEmpty else { return }
+        guard !self.hasBlockingRunActivity, !self.isSending, !self.isAborting else { return }
+        guard !self.sessionBranches.contains(where: {
+            $0.leafEntryId == normalizedLeafEntryID && $0.active
+        }) else { return }
+        let initiatingSession = self.currentSessionSnapshot()
+        do {
+            try await self.transport.switchSessionBranch(
+                sessionKey: initiatingSession.key,
+                leafEntryId: normalizedLeafEntryID)
+            guard self.isCurrentSession(initiatingSession) else { return }
+            self.replyTarget = nil
+            self.runMessageScopesByRunID.removeAll()
+            self.provisionalFinalMessagesByID.removeAll()
+            let historyRequest = self.beginHistoryRequest(for: initiatingSession)
+            _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
+            guard self.isCurrentSession(initiatingSession) else { return }
+            await self.refreshSessionBranches()
+        } catch {
+            guard self.isCurrentSession(initiatingSession) else { return }
+            self.errorText = error.localizedDescription
+            chatSessionActionsLogger.error(
+                "sessions.branches.switch failed \(error.localizedDescription, privacy: .public)")
         }
     }
 

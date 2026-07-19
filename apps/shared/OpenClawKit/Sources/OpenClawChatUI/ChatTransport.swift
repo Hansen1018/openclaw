@@ -439,6 +439,8 @@ public protocol OpenClawChatTransport: Sendable {
     func forkSessionAtMessage(
         sessionKey: String,
         entryId: String) async throws -> OpenClawChatForkAtMessageResponse
+    func listSessionBranches(sessionKey: String) async throws -> OpenClawChatSessionBranchesResponse
+    func switchSessionBranch(sessionKey: String, leafEntryId: String) async throws
     func setSessionModel(sessionKey: String, model: String?) async throws
     func patchSessionModel(
         sessionKey: String,
@@ -766,6 +768,20 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.fork not supported by this transport"])
+    }
+
+    public func listSessionBranches(sessionKey _: String) async throws -> OpenClawChatSessionBranchesResponse {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.branches.list not supported by this transport"])
+    }
+
+    public func switchSessionBranch(sessionKey _: String, leafEntryId _: String) async throws {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.branches.switch not supported by this transport"])
     }
 
     public func listModels() async throws -> [OpenClawChatModelChoice] {

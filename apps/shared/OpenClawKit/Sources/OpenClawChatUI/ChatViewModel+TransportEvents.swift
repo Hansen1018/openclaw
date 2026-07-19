@@ -43,7 +43,7 @@ extension OpenClawChatViewModel {
                 Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
                 return
             }
-            if change.reason == "rewind" {
+            if change.reason == "rewind" || change.reason == "branch-switch" {
                 guard let sessionKey = change.sessionKey,
                       self.matchesCurrentSessionKey(
                           incoming: sessionKey,
@@ -51,7 +51,11 @@ extension OpenClawChatViewModel {
                           current: self.sessionKey)
                 else { return }
                 let context = self.beginHistoryRequest()
-                Task { await self.refreshHistoryAfterRun(historyRequest: context) }
+                Task {
+                    await self.refreshHistoryAfterRun(historyRequest: context)
+                    guard self.isCurrentSession(context.session) else { return }
+                    await self.refreshSessionBranches()
+                }
                 return
             }
             guard change.reason == "patch" || change.reason == "command-metadata" else { return }

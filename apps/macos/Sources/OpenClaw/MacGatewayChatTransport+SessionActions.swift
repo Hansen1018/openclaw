@@ -166,6 +166,24 @@ extension MacGatewayChatTransport {
         return try JSONDecoder().decode(OpenClawChatForkAtMessageResponse.self, from: data)
     }
 
+    func listSessionBranches(sessionKey: String) async throws -> OpenClawChatSessionBranchesResponse {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.listSessionBranches(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID)
+        let data = try await self.requestSessionAction(request)
+        return try JSONDecoder().decode(OpenClawChatSessionBranchesResponse.self, from: data)
+    }
+
+    func switchSessionBranch(sessionKey: String, leafEntryId: String) async throws {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.switchSessionBranch(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            leafEntryId: leafEntryId)
+        _ = try await self.requestSessionAction(request)
+    }
+
     static func rewindSessionRequest(
         sessionKey: String,
         agentID: String?,
