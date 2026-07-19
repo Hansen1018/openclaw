@@ -32,11 +32,17 @@ export function renderSessionRowBadges(params: {
   // Child rows suppress ordinary placement chrome, but a retained conflict must stay discoverable.
   const conflictPlacementState = workspaceConflictCount > 0 ? params.placementState : undefined;
   const displayedPlacementState = cloudPlacementState ?? conflictPlacementState;
-  if (!hasAutomation && !params.hasApproval && !displayedPlacementState) {
+  const hasWorkspaceConflict = workspaceConflictCount > 0;
+  if (
+    !hasAutomation &&
+    !params.hasApproval &&
+    !displayedPlacementState &&
+    !hasWorkspaceConflict
+  ) {
     return nothing;
   }
-  const cloudLabel = displayedPlacementState
-    ? workspaceConflictCount > 0
+  const cloudLabel = hasWorkspaceConflict
+    ? displayedPlacementState
       ? t(
           workspaceConflictCount === 1
             ? "sessionsView.cloudWorkerPlacementConflict"
@@ -46,8 +52,15 @@ export function renderSessionRowBadges(params: {
             count: String(workspaceConflictCount),
           },
         )
-      : t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
-    : "";
+      : t(
+          workspaceConflictCount === 1
+            ? "sessionsView.cloudWorkerDescendantConflict"
+            : "sessionsView.cloudWorkerDescendantConflicts",
+          { count: String(workspaceConflictCount) },
+        )
+    : displayedPlacementState
+      ? t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
+      : "";
   return html`<span class="session-row-badges">
     ${hasAutomation
       ? html`<span
@@ -67,11 +80,11 @@ export function renderSessionRowBadges(params: {
           >${icons.alertTriangle}</span
         >`
       : nothing}
-    ${displayedPlacementState
+    ${displayedPlacementState || hasWorkspaceConflict
       ? html`<span
           class="session-row-badge session-row-badge--cloud"
-          data-placement-state=${displayedPlacementState}
-          data-workspace-conflicts=${workspaceConflictCount > 0
+          data-placement-state=${displayedPlacementState ?? nothing}
+          data-workspace-conflicts=${hasWorkspaceConflict
             ? String(workspaceConflictCount)
             : nothing}
           role="img"
