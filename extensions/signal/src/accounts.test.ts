@@ -383,6 +383,25 @@ describe("resolveSignalAccount", () => {
     expect(resolveSignalAccount({ cfg }).config.account).toBe("+15555550123");
   });
 
+  it("deduplicates a case-preserving default account from the implicit root transport", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          transport: {
+            kind: "container",
+            url: "http://signal-container:8080",
+          },
+          accounts: {
+            Default: { account: "+15555550123" },
+          },
+        },
+      },
+    } as never;
+
+    expect(listSignalAccountIds(cfg)).toEqual(["default"]);
+    expect(resolveSignalAccount({ cfg }).config.account).toBe("+15555550123");
+  });
+
   it("does not treat accountUuid as an implicit configured default account", () => {
     const cfg = {
       channels: {

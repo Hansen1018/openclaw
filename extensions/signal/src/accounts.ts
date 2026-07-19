@@ -46,6 +46,7 @@ export type ResolvedSignalAccount = {
 };
 
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal", {
+  normalizeAccountId,
   implicitDefaultAccount: {
     channelKeys: ["account", "transport"],
   },
