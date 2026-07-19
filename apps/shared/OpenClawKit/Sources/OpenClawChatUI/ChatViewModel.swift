@@ -84,7 +84,18 @@ public final class OpenClawChatViewModel {
     public internal(set) var isLoadingSessionBranches = false
     @ObservationIgnored
     var sessionBranchesRefreshGeneration: UInt64 = 0
-    var isSwitchingSessionBranch = false
+    struct SessionBranchSwitchActivity: Equatable {
+        let session: SessionSnapshot
+        let generation: UInt64
+    }
+
+    var sessionBranchSwitchActivity: SessionBranchSwitchActivity?
+    @ObservationIgnored
+    var nextSessionBranchSwitchGeneration: UInt64 = 0
+
+    var isSwitchingSessionBranch: Bool {
+        self.sessionBranchSwitchActivity != nil
+    }
 
     /// True when this view model owns a gateway-scoped durable text outbox.
     public var supportsOfflineTextOutbox: Bool {
@@ -780,6 +791,24 @@ extension OpenClawChatViewModel {
             (!contractSensitive || self.sessionRoutingContract == snapshot.sessionRoutingContract)
     }
 
+    func beginSessionBranchSwitchActivity(for session: SessionSnapshot) -> SessionBranchSwitchActivity {
+        self.nextSessionBranchSwitchGeneration &+= 1
+        let activity = SessionBranchSwitchActivity(
+            session: session,
+            generation: self.nextSessionBranchSwitchGeneration)
+        self.sessionBranchSwitchActivity = activity
+        return activity
+    }
+
+    func isCurrentSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) -> Bool {
+        self.sessionBranchSwitchActivity == activity
+    }
+
+    func endSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) {
+        guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+        self.sessionBranchSwitchActivity = nil
+    }
+
     private func isCurrentBootstrap(_ context: BootstrapContext) -> Bool {
         self.bootstrapGeneration == context.id && self.isCurrentSession(context.session)
     }
@@ -1149,6 +1178,7 @@ extension OpenClawChatViewModel {
         resetSlashCommandCatalog()
         self.sessionBranches = []
         self.isLoadingSessionBranches = false
+        self.sessionBranchSwitchActivity = nil
         clearPendingRuns(reason: nil)
     }
 

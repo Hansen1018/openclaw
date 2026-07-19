@@ -434,22 +434,28 @@ extension OpenClawChatViewModel {
             $0.leafEntryId == normalizedLeafEntryID && $0.active
         }) else { return }
         let initiatingSession = self.currentSessionSnapshot()
-        self.isSwitchingSessionBranch = true
-        defer { self.isSwitchingSessionBranch = false }
+        let switchActivity = self.beginSessionBranchSwitchActivity(for: initiatingSession)
+        defer { self.endSessionBranchSwitchActivity(switchActivity) }
         do {
             try await self.transport.switchSessionBranch(
                 sessionKey: initiatingSession.key,
                 leafEntryId: normalizedLeafEntryID)
-            guard self.isCurrentSession(initiatingSession) else { return }
+            guard self.isCurrentSession(initiatingSession),
+                  self.isCurrentSessionBranchSwitchActivity(switchActivity)
+            else { return }
             self.replyTarget = nil
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
-            guard self.isCurrentSession(initiatingSession) else { return }
+            guard self.isCurrentSession(initiatingSession),
+                  self.isCurrentSessionBranchSwitchActivity(switchActivity)
+            else { return }
             await self.refreshSessionBranches()
         } catch {
-            guard self.isCurrentSession(initiatingSession) else { return }
+            guard self.isCurrentSession(initiatingSession),
+                  self.isCurrentSessionBranchSwitchActivity(switchActivity)
+            else { return }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.branches.switch failed \(error.localizedDescription, privacy: .public)")

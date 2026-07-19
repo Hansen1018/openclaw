@@ -644,6 +644,34 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.branchListSessionKeys().contains("main") == false)
     }
 
+    @Test func `navigation releases branch switch gate before stale completion`() async {
+        let gate = SessionActionCompletionGate()
+        let branches = self.branches()
+        let transport = SessionActionTransport(branchSwitchGate: gate, branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+
+        let branchSwitch = Task { await viewModel.switchToBranch("leaf-new") }
+        guard await self.waitForForkStart(gate) else {
+            gate.release()
+            branchSwitch.cancel()
+            Issue.record("timed out waiting for branch switch start signal")
+            return
+        }
+
+        viewModel.switchSession(to: "other")
+        viewModel.input = "new session message"
+        #expect(viewModel.hasBlockingRunActivity == false)
+        #expect(viewModel.canSend)
+
+        gate.release()
+        await branchSwitch.value
+
+        #expect(viewModel.sessionKey == "other")
+        #expect(viewModel.hasBlockingRunActivity == false)
+        #expect(viewModel.canSend)
+    }
+
     @Test func `fork at message switches and seeds editor`() async {
         let transport = SessionActionTransport(
             forkAtMessageSessionKey: "agent:main:forked",
@@ -696,13 +724,19 @@ struct ChatViewModelSessionActionTests {
         let transport = SessionActionTransport(branches: self.branches())
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.setReplyTarget(messageID: UUID(), text: "old branch", senderLabel: "User")
+        viewModel.input = "new message"
 
         viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "other", reason: "branch-switch")))
         #expect(viewModel.replyTarget != nil)
+        #expect(viewModel.canSend)
         viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "branch-switch")))
+        #expect(viewModel.hasBlockingRunActivity)
+        #expect(viewModel.canSend == false)
 
         let refreshed = await self.waitForBranchListRequest(transport)
         #expect(refreshed)
+        let unlocked = await self.waitForBranchSwitchActivityToClear(viewModel)
+        #expect(unlocked)
         #expect(viewModel.replyTarget == nil)
         #expect(await transport.historySessionKeys() == ["main"])
         #expect(await transport.branchListSessionKeys() == ["main"])
@@ -787,6 +821,21 @@ struct ChatViewModelSessionActionTests {
         let deadline = clock.now + timeout
         while clock.now < deadline {
             if await transport.branchListSessionKeys().isEmpty == false {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForBranchSwitchActivityToClear(
+        _ viewModel: OpenClawChatViewModel,
+        timeout: Duration = .seconds(15)) async -> Bool
+    {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if viewModel.hasBlockingRunActivity == false {
                 return true
             }
             await Task.yield()

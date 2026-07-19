@@ -54,7 +54,15 @@ extension OpenClawChatViewModel {
                 self.runMessageScopesByRunID.removeAll()
                 self.provisionalFinalMessagesByID.removeAll()
                 let context = self.beginHistoryRequest()
+                let switchActivity = change.reason == "branch-switch"
+                    ? self.beginSessionBranchSwitchActivity(for: context.session)
+                    : nil
                 Task {
+                    defer {
+                        if let switchActivity {
+                            self.endSessionBranchSwitchActivity(switchActivity)
+                        }
+                    }
                     await self.refreshHistoryAfterRun(historyRequest: context)
                     guard self.isCurrentSession(context.session) else { return }
                     await self.refreshSessionBranches()
