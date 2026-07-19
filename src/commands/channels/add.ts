@@ -64,16 +64,6 @@ function isShippedSetupRecoveryOwner(entry: ChannelPluginCatalogEntry | undefine
   );
 }
 
-function resolvesSetupRecoveryOwner(params: {
-  entry: ChannelPluginCatalogEntry | undefined;
-  channelId: ChannelId;
-}): boolean {
-  return (
-    params.entry?.setupCapabilities?.invalidConfigRecovery === true &&
-    normalizeChannelId(params.entry.id) === params.channelId
-  );
-}
-
 async function resolveCatalogChannelEntry(
   raw: string,
   cfg: OpenClawConfig | null,
@@ -217,17 +207,17 @@ async function channelsAddCommandImpl(
     return;
   }
 
-  let channel = normalizeChannelId(rawChannel);
-  let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const recoveringInvalidConfig = configSnapshot.exists && !configSnapshot.valid;
-  if (
-    recoveringInvalidConfig &&
-    (!recoveryChannelId ||
-      !resolvesSetupRecoveryOwner({ entry: catalogEntry, channelId: recoveryChannelId }))
-  ) {
+  if (recoveringInvalidConfig && (!recoveryChannelId || !recoveryCatalogEntry)) {
     rejectInvalidConfigFileSnapshot(runtime, configSnapshot);
     return;
   }
+  // Invalid config cannot participate in owner selection. Keep the exact shipped catalog owner
+  // that authorized recovery so a configured same-channel shadow cannot replace its setup code.
+  let channel = recoveringInvalidConfig ? recoveryChannelId : normalizeChannelId(rawChannel);
+  let catalogEntry = recoveringInvalidConfig
+    ? recoveryCatalogEntry
+    : await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
   // May load a scoped plugin when the channel is not already registered.

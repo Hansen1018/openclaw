@@ -603,7 +603,7 @@ describe("channelsAddCommand", () => {
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("does not borrow invalid config recovery for a different selected setup owner", async () => {
+  it("keeps invalid config recovery bound to the initially approved shipped owner", async () => {
     const config = {
       channels: { signal: { mode: "native" } },
       plugins: {
@@ -613,6 +613,10 @@ describe("channelsAddCommand", () => {
       },
     } as OpenClawConfig;
     const officialPlugin = createSignalPlugin();
+    const shadowApplyAccountConfig = vi.fn();
+    const shadowPlugin = createSignalPlugin(undefined, {
+      applyAccountConfig: shadowApplyAccountConfig,
+    });
     const officialEntry: ChannelPluginCatalogEntry = {
       id: "signal",
       pluginId: "signal",
@@ -625,11 +629,20 @@ describe("channelsAddCommand", () => {
       id: "signal",
       pluginId: "signal-shadow",
       origin: "config",
-      meta: officialPlugin.meta,
+      meta: shadowPlugin.meta,
+      setupCapabilities: { invalidConfigRecovery: true },
       install: { npmSpec: "signal-shadow", defaultChoice: "npm" },
     };
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([officialEntry]);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "signal-shadow", plugin: shadowPlugin, source: "test" }]),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockImplementation((options) =>
+      options?.excludeOrigins ? [officialEntry] : [shadowEntry],
+    );
     catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(shadowEntry);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([{ pluginId: "signal", plugin: officialPlugin, source: "test" }]),
+    );
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       valid: false,
@@ -644,9 +657,12 @@ describe("channelsAddCommand", () => {
       { hasFlags: true },
     );
 
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "signal", pluginId: "signal" }),
+    );
+    expect(shadowApplyAccountConfig).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
   });
 
   it("does not reuse install-only invalid config recovery during channel setup", async () => {
