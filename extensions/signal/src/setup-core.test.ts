@@ -394,6 +394,38 @@ describe("signalSetupAdapter", () => {
     expect(next?.channels?.signal?.accounts?.personal).not.toHaveProperty("httpUrl");
   });
 
+  it("prefers the account-keyed recovery selection over another selection's URL match", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            apiMode: "auto",
+            accounts: {
+              work: { account: "+15555550124", httpUrl: "http://shared-selection:8080" },
+              personal: { account: "+15555550125", httpUrl: "http://personal:8080" },
+            },
+          },
+        },
+      } as never,
+      accountId: "work",
+      input: {
+        signalTransports: JSON.stringify({
+          personal: { kind: "container", url: "http://shared-selection:8080" },
+          work: { kind: "external-native", url: "http://work-chosen:8080" },
+        }),
+      },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
+      kind: "external-native",
+      url: "http://work-chosen:8080",
+    });
+    expect(next?.channels?.signal?.accounts?.personal?.transport).toEqual({
+      kind: "container",
+      url: "http://shared-selection:8080",
+    });
+  });
+
   it("validates the account transport recovery map", () => {
     expect(
       signalSetupAdapter.validateInput?.({

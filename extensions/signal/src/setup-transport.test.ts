@@ -44,6 +44,36 @@ describe("detectSignalTransport", () => {
 });
 
 describe("prepareSignalManagedNativeTransport", () => {
+  it("normalizes the default account id before preserving its managed transport", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          transport: {
+            kind: "managed-native",
+            url: "https://127.0.0.1:9443",
+            cliPath: "/opt/signal-cli",
+            configPath: "/var/lib/signal-cli",
+            httpHost: "127.0.0.2",
+            httpPort: 8181,
+            startupTimeoutMs: 45_000,
+          },
+        },
+      },
+    } as const;
+
+    expect(
+      prepareSignalManagedNativeTransport({ cfg: cfg as never, accountId: " Default " }),
+    ).toEqual({
+      kind: "managed-native",
+      url: "https://127.0.0.1:9443",
+      cliPath: "/opt/signal-cli",
+      configPath: "/var/lib/signal-cli",
+      httpHost: "127.0.0.2",
+      httpPort: 8181,
+      startupTimeoutMs: 45_000,
+    });
+  });
+
   it("allocates distinct ports for managed native accounts", () => {
     const cfg = {
       channels: {

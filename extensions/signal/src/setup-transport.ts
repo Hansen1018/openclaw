@@ -87,9 +87,10 @@ export function resolveConfiguredSignalTransport(
   accountId: string,
 ): SignalTransportConfig | undefined {
   const signal = cfg.channels?.signal;
-  return accountId === DEFAULT_ACCOUNT_ID
+  const normalizedAccountId = normalizeAccountId(accountId);
+  return normalizedAccountId === DEFAULT_ACCOUNT_ID
     ? signal?.transport
-    : resolveAccountEntry(signal?.accounts, accountId)?.transport;
+    : resolveAccountEntry(signal?.accounts, normalizedAccountId)?.transport;
 }
 
 function alignManagedConnectionUrlAfterBindChange(params: {

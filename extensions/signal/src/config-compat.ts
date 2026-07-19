@@ -648,11 +648,14 @@ export function migrateLegacySignalTransportConfigSync(
         return undefined;
       }
     })();
-    const selection = selections.find(
-      (candidate) =>
-        (accountId && normalizeAccountId(accountId) === candidate.accountId) ||
-        (entryUrl !== undefined && entryUrl === candidate.url),
-    );
+    const normalizedAccountId = accountId ? normalizeAccountId(accountId) : undefined;
+    const selection =
+      (normalizedAccountId
+        ? selections.find((candidate) => candidate.accountId === normalizedAccountId)
+        : undefined) ??
+      (entryUrl !== undefined
+        ? selections.find((candidate) => entryUrl === candidate.url)
+        : undefined);
     if (selection) {
       // Explicit setup owns both protocol and endpoint. It must be able to replace a malformed
       // shipped URL instead of trying to normalize the retired value first.
