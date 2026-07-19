@@ -456,7 +456,7 @@ describe("signalSetupAdapter", () => {
     });
   });
 
-  it("does not borrow the root account while detecting a named account transport", async () => {
+  it("uses the inherited root account while detecting a named account transport", async () => {
     const detect = vi.fn().mockResolvedValue({
       kind: "container",
       url: "http://signal-container:8080",
@@ -473,7 +473,10 @@ describe("signalSetupAdapter", () => {
       detect,
     });
 
-    expect(detect).toHaveBeenCalledWith({ url: "signal-container:8080" });
+    expect(detect).toHaveBeenCalledWith({
+      url: "signal-container:8080",
+      account: "+15555550123",
+    });
   });
 
   it("rejects a transport kind without an HTTP URL", () => {
@@ -528,7 +531,7 @@ describe("signalSetupAdapter", () => {
     ).toBeNull();
   });
 
-  it("does not let a new named container transport borrow the root Signal account", () => {
+  it("allows a named container transport to inherit the root Signal account", () => {
     expect(
       signalSetupAdapter.validateInput?.({
         cfg: {
@@ -542,7 +545,7 @@ describe("signalSetupAdapter", () => {
           signalTransport: "container",
         },
       }),
-    ).toBe("Signal container transport requires --signal-number or an existing account.");
+    ).toBeNull();
   });
 
   it("does not materialize a CLI path for an external transport", async () => {

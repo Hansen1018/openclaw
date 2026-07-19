@@ -102,6 +102,7 @@ import {
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
 import {
+  completePostCorePluginUpdate,
   continuePostCoreUpdateInFreshProcess,
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   POST_CORE_UPDATE_CHANNEL_ENV,
@@ -605,7 +606,7 @@ async function updateCommandInternal(
         ? currentPluginInstallRecords
         : parentPluginInstallRecords;
 
-    const pluginUpdate = await updatePluginsAfterCoreUpdate({
+    const initialPluginUpdate = await updatePluginsAfterCoreUpdate({
       root,
       channel: postCoreUpdateChannel,
       configSnapshot: restoredPostCoreConfig.snapshot,
@@ -614,6 +615,17 @@ async function updateCommandInternal(
       opts,
       timeoutMs: updateStepTimeoutMs,
       pluginInstallRecords,
+    });
+    const { pluginUpdate } = await completePostCorePluginUpdate({
+      root,
+      pluginUpdate: initialPluginUpdate,
+      // Aggregate `changed` also includes restored config. Only package/channel sync can replace
+      // the migration owner and require another process to load the updated plugin module.
+      freshDoctorRequired:
+        initialPluginUpdate.sync?.changed === true || initialPluginUpdate.npm?.changed === true,
+      yes: opts.yes === true,
+      json: opts.json === true,
+      timeoutMs: updateStepTimeoutMs,
     });
     if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
       await writePostCorePluginUpdateResultFile(

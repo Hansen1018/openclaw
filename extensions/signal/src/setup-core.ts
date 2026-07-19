@@ -144,10 +144,7 @@ function resolveSignalSetupAccount(params: {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return resolveSignalAccount({ cfg: params.cfg, accountId }).config.account;
-  }
-  return resolveAccountEntry(params.cfg.channels?.signal?.accounts, accountId)?.account;
+  return resolveSignalAccount({ cfg: params.cfg, accountId }).config.account;
 }
 
 export async function prepareSignalSetupInput(params: {

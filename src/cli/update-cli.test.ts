@@ -1611,6 +1611,61 @@ describe("update-cli", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("runs the updated plugin doctor before publishing a changed post-core result", async () => {
+    const resultDir = await createTrackedTempDir("openclaw-post-core-doctor-result-");
+    const resultPath = path.join(resultDir, "plugins.json");
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: true,
+      config: baseConfig,
+      outcomes: [],
+    });
+    let strictValidationEnv: string | undefined;
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async (options) => {
+      if (!options) {
+        strictValidationEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+        await expect(fs.access(resultPath)).rejects.toThrow();
+      }
+      return baseSnapshot;
+    });
+    vi.mocked(runExec).mockImplementationOnce(async (_file, args) => {
+      expect(args).toEqual([
+        "/tmp/openclaw-updated-entry.mjs",
+        "doctor",
+        "--repair",
+        "--non-interactive",
+        "--no-workspace-suggestions",
+        "--yes",
+      ]);
+      await expect(fs.access(resultPath)).rejects.toThrow();
+      return { stdout: "", stderr: "" };
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: resultPath,
+        OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: "1",
+      },
+      async () => {
+        await updateCommand({ restart: false, yes: true });
+      },
+    );
+
+    const result = JSON.parse(await fs.readFile(resultPath, "utf-8")) as {
+      status?: string;
+      changed?: boolean;
+    };
+    expect(result).toMatchObject({ status: "ok", changed: true });
+    expect(strictValidationEnv).toBe("0");
+    expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledTimes(1);
+    expect(runExec).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+  });
+
   it("post-core resume mode uses the parent install records snapshot for missing payload warnings", async () => {
     const resultDir = createCaseDir("openclaw-post-core-records");
     const recordsPath = path.join(resultDir, "plugin-install-records.json");

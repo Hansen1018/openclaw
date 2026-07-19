@@ -16,7 +16,7 @@ import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
@@ -173,6 +173,51 @@ async function withNormalConfigValidation<T>(run: () => Promise<T>): Promise<T> 
   }
 }
 
+export async function completePostCorePluginUpdate(params: {
+  root: string;
+  pluginUpdate: PostCorePluginUpdateResult;
+  freshDoctorRequired: boolean;
+  yes: boolean;
+  json: boolean;
+  timeoutMs: number;
+}): Promise<{
+  pluginUpdate: PostCorePluginUpdateResult;
+  configSnapshot: ConfigFileSnapshot;
+}> {
+  let pluginUpdate = params.pluginUpdate;
+  if (pluginUpdate.status !== "error" && params.freshDoctorRequired) {
+    // Plugin upgrades can replace the migration owner loaded by the first doctor pass. Complete
+    // the updated-owner pass before publishing success to a waiting parent update process.
+    await runPostPluginDoctorInFreshProcess({
+      root: params.root,
+      yes: params.yes,
+      json: params.json,
+      timeoutMs: params.timeoutMs,
+    });
+  }
+
+  // Re-parse outside the update-only schema window. A plugin migration that did not converge must
+  // fail finalization instead of letting legacy config reach the restarted gateway.
+  const configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());
+  if (pluginUpdate.status !== "error" && !configSnapshot.valid) {
+    pluginUpdate = {
+      ...pluginUpdate,
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+      warnings: [
+        ...(pluginUpdate.warnings ?? []),
+        {
+          reason: "Config remained invalid after updated plugin migrations.",
+          message:
+            "Post-update plugin migration did not produce a valid config; refusing to restart.",
+          guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
+        },
+      ],
+    };
+  }
+  return { pluginUpdate, configSnapshot };
+}
+
 export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
   suppressDeprecations();
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
@@ -240,7 +285,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     });
   }
 
-  let pluginUpdate = await withUpdateFinalizationEnv(async () => {
+  const initialPluginUpdate = await withUpdateFinalizationEnv(async () => {
     await createUpdateConfigSnapshot();
     await doctorCommand(defaultRuntime, {
       nonInteractive: true,
@@ -283,40 +328,19 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
       pluginInstallRecords,
     });
-    if (updateResult.status === "error" || !updateResult.changed) {
-      return updateResult;
-    }
-
-    // The first doctor may have loaded the pre-update plugin module. A fresh process guarantees
-    // the second pass executes the newly installed owner before normal validation resumes.
-    await runPostPluginDoctorInFreshProcess({
-      root,
-      yes: opts.yes === true,
-      json: opts.json === true,
-      timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-    });
     return updateResult;
   });
 
-  // Re-parse outside the update-only schema window. A plugin migration that did not converge must
-  // fail finalization instead of letting legacy config reach the restarted gateway.
-  configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());
-  if (pluginUpdate.status !== "error" && !configSnapshot.valid) {
-    pluginUpdate = {
-      ...pluginUpdate,
-      status: "error",
-      reason: "post-plugin-doctor-invalid-config",
-      warnings: [
-        ...(pluginUpdate.warnings ?? []),
-        {
-          reason: "Config remained invalid after updated plugin migrations.",
-          message:
-            "Post-update plugin migration did not produce a valid config; refusing to restart.",
-          guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
-        },
-      ],
-    };
-  }
+  const completedPluginUpdate = await completePostCorePluginUpdate({
+    root,
+    pluginUpdate: initialPluginUpdate,
+    freshDoctorRequired: initialPluginUpdate.changed,
+    yes: opts.yes === true,
+    json: opts.json === true,
+    timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+  });
+  const pluginUpdate = completedPluginUpdate.pluginUpdate;
+  configSnapshot = completedPluginUpdate.configSnapshot;
 
   const result: UpdateFinalizeResult = {
     status:
