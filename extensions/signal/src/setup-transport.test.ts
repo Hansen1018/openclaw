@@ -466,6 +466,51 @@ describe("writeSignalAccountTransport", () => {
     },
   );
 
+  it("rejects a local external endpoint on an enabled sibling managed bind", () => {
+    expect(() =>
+      writeSignalAccountTransport({
+        cfg: {
+          channels: {
+            signal: {
+              enabled: false,
+              account: "+15555550123",
+              transport: { kind: "managed-native", httpPort: 8181 },
+            },
+          },
+        },
+        accountId: "work",
+        transport: { kind: "external-native", url: "http://localhost:8181" },
+      }),
+    ).toThrow(
+      'Signal external-native account "work" uses local port 8181, which conflicts with managed native account "default".',
+    );
+  });
+
+  it("allows a local external endpoint on a disabled sibling managed bind", () => {
+    const next = writeSignalAccountTransport({
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              dormant: {
+                enabled: false,
+                account: "+15555550123",
+                transport: { kind: "managed-native", httpPort: 8181 },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      transport: { kind: "container", url: "http://localhost:8181" },
+    });
+
+    expect(next.channels?.signal?.accounts?.work?.transport).toEqual({
+      kind: "container",
+      url: "http://localhost:8181",
+    });
+  });
+
   it("writes the implicit default account without changing named accounts", () => {
     const next = writeSignalAccountTransport({
       cfg: {

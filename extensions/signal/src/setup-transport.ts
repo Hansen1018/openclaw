@@ -50,6 +50,38 @@ function normalizeTransport(transport: SignalTransportConfig): SignalTransportCo
   return { ...transport, url: normalizeSignalTransportUrl(transport.url) };
 }
 
+function assertSignalLocalEndpointDoesNotConflictWithManagedSibling(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  transport: SignalTransportConfig;
+}): void {
+  if (params.transport.kind === "managed-native") {
+    return;
+  }
+  const localPort = resolveLocalSignalTransportPort(params.transport.url);
+  if (localPort === undefined) {
+    return;
+  }
+  const targetAccountId = normalizeAccountId(params.accountId);
+  for (const accountId of listSignalAccountIds(params.cfg)) {
+    if (normalizeAccountId(accountId) === targetAccountId) {
+      continue;
+    }
+    const accountEntry = resolveAccountEntry(params.cfg.channels?.signal?.accounts, accountId);
+    if (accountEntry?.enabled === false) {
+      continue;
+    }
+    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
+    const siblingTransport = accountConfig.transport;
+    if (siblingTransport?.kind !== "managed-native" || siblingTransport.httpPort !== localPort) {
+      continue;
+    }
+    throw new Error(
+      `Signal ${params.transport.kind} account "${targetAccountId}" uses local port ${localPort}, which conflicts with managed native account "${accountId}". Choose a distinct transport URL.`,
+    );
+  }
+}
+
 export function resolveConfiguredSignalTransport(
   cfg: OpenClawConfig,
   accountId: string,
@@ -233,11 +265,17 @@ export function writeSignalAccountTransport(params: {
   accountId: string;
   transport: SignalTransportConfig;
 }): OpenClawConfig {
+  const transport = normalizeTransport(params.transport);
+  assertSignalLocalEndpointDoesNotConflictWithManagedSibling({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    transport,
+  });
   const next = patchChannelConfigForAccount({
     cfg: params.cfg,
     channel: "signal",
     accountId: params.accountId,
-    patch: { transport: normalizeTransport(params.transport) },
+    patch: { transport },
   });
   return clearLegacySignalTransportFieldsForAccount({
     cfg: next,
