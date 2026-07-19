@@ -9,6 +9,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { SignalTransportConfig } from "./account-types.js";
 import {
   listSignalAccountIds,
+  resolveSignalAccount,
   resolveSignalAccountConfig,
   resolveSignalTransport,
 } from "./accounts.js";
@@ -71,8 +72,10 @@ function assertSignalLocalEndpointDoesNotConflictWithManagedSibling(params: {
     if (accountEntry?.enabled === false) {
       continue;
     }
-    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
-    const siblingTransport = accountConfig.transport;
+    const siblingTransport = resolveSignalAccount({
+      cfg: params.cfg,
+      accountId,
+    }).transport;
     if (siblingTransport?.kind !== "managed-native" || siblingTransport.httpPort !== localPort) {
       continue;
     }

@@ -651,6 +651,38 @@ describe("signal transport compatibility", () => {
     ]);
   });
 
+  it("defers invalid ports used to derive external legacy endpoints", async () => {
+    const cfg = signalConfig({
+      apiMode: "container",
+      httpHost: "127.0.0.1",
+      httpPort: 70_000,
+    });
+    const result = await migrateLegacySignalTransportConfig({ cfg });
+
+    expect(result.config).toBe(cfg);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "- channels.signal: legacy httpPort must be an integer between 1 and 65535; correct httpPort, then run openclaw doctor --fix.",
+    ]);
+  });
+
+  it("defers malformed hosts used to derive legacy endpoints", async () => {
+    const cfg = signalConfig({
+      apiMode: "native",
+      autoStart: true,
+      httpHost: "bad host",
+    });
+
+    expect(() => normalizeCompatibilityConfig({ cfg })).not.toThrow();
+    const result = await migrateLegacySignalTransportConfig({ cfg });
+
+    expect(result.config).toBe(cfg);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "- channels.signal: legacy httpHost is invalid; keep the current config, correct httpHost, then run openclaw doctor --fix.",
+    ]);
+  });
+
   it("ignores a retired bind port when an explicit container URL owns the endpoint", async () => {
     const result = await migrateLegacySignalTransportConfig({
       cfg: {

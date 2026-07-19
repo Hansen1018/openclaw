@@ -29,6 +29,8 @@ const PENDING_LEGACY_TRANSPORT_WARNING =
   '- channels.signal: legacy auto transport is ambiguous while its endpoint is unavailable; bring the endpoint online, choose one account transport explicitly with "openclaw channels add --channel signal --account <id> --http-url <url> --signal-transport external-native|container", or recover distinct endpoints atomically with --signal-transports <json>.';
 const PENDING_LEGACY_INVALID_URL_WARNING =
   "- channels.signal: legacy httpUrl is invalid; keep the current config, correct httpUrl, then run openclaw doctor --fix.";
+const PENDING_LEGACY_INVALID_HOST_WARNING =
+  "- channels.signal: legacy httpHost is invalid; keep the current config, correct httpHost, then run openclaw doctor --fix.";
 const PENDING_LEGACY_INVALID_PORT_WARNING =
   "- channels.signal: legacy httpPort must be an integer between 1 and 65535; correct httpPort, then run openclaw doctor --fix.";
 
@@ -100,9 +102,7 @@ function legacyBaseUrl(entry: Record<string, unknown>, parent: Record<string, un
   const host = optionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
   const rawPort = inherited(entry, parent, "httpPort");
   const port = typeof rawPort === "number" ? rawPort : 8080;
-  return isValidSignalManagedNativePort(port)
-    ? buildSignalTransportHttpUrl(host, port)
-    : `http://${host}:${port}`;
+  return buildSignalTransportHttpUrl(host, port);
 }
 
 function hasLegacyFields(entry: Record<string, unknown>): boolean {
@@ -140,6 +140,28 @@ function hasInvalidLegacyHttpUrl(
       return true;
     }
   });
+}
+
+function findInvalidLegacyDerivedEndpoint(
+  entries: Record<string, unknown>[],
+  parent: Record<string, unknown>,
+): "host" | "port" | undefined {
+  for (const entry of entries) {
+    if (optionalString(inherited(entry, parent, "httpUrl"))) {
+      continue;
+    }
+    const rawPort = inherited(entry, parent, "httpPort");
+    if (rawPort !== undefined && !isValidSignalManagedNativePort(rawPort)) {
+      return "port";
+    }
+    const host = optionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
+    try {
+      buildSignalTransportHttpUrl(host, typeof rawPort === "number" ? rawPort : 8080);
+    } catch {
+      return "host";
+    }
+  }
+  return undefined;
 }
 
 function hasInvalidManagedTransportPort(
@@ -531,6 +553,18 @@ export async function migrateLegacySignalTransportConfig(params: {
   const legacyResolutionEntries = migrationEntries.filter(
     (entry) => !isSignalTransportConfig(entry.transport),
   );
+  const invalidDerivedEndpoint = findInvalidLegacyDerivedEndpoint(legacyResolutionEntries, signal);
+  if (invalidDerivedEndpoint) {
+    return {
+      config: params.cfg,
+      changes: [],
+      warnings: [
+        invalidDerivedEndpoint === "port"
+          ? PENDING_LEGACY_INVALID_PORT_WARNING
+          : PENDING_LEGACY_INVALID_HOST_WARNING,
+      ],
+    };
+  }
   if (hasInvalidLegacyHttpUrl(legacyResolutionEntries, signal)) {
     return {
       config: params.cfg,
@@ -624,12 +658,22 @@ export function migrateLegacySignalTransportConfigSync(
       return index >= 0 ? [entries[index]] : [];
     }),
   );
-  if (
-    hasInvalidLegacyHttpUrl(
-      legacyResolutionEntries.filter((entry) => !selectedEntries.has(entry)),
-      signal,
-    )
-  ) {
+  const unresolvedLegacyEntries = legacyResolutionEntries.filter(
+    (entry) => !selectedEntries.has(entry),
+  );
+  const invalidDerivedEndpoint = findInvalidLegacyDerivedEndpoint(unresolvedLegacyEntries, signal);
+  if (invalidDerivedEndpoint) {
+    return {
+      config: cfg,
+      changes: [],
+      warnings: [
+        invalidDerivedEndpoint === "port"
+          ? PENDING_LEGACY_INVALID_PORT_WARNING
+          : PENDING_LEGACY_INVALID_HOST_WARNING,
+      ],
+    };
+  }
+  if (hasInvalidLegacyHttpUrl(unresolvedLegacyEntries, signal)) {
     return {
       config: cfg,
       changes: [],

@@ -516,6 +516,29 @@ describe("writeSignalAccountTransport", () => {
     );
   });
 
+  it("rejects a local external endpoint on a sibling's implicit managed bind", () => {
+    expect(() =>
+      writeSignalAccountTransport({
+        cfg: {
+          channels: {
+            signal: {
+              accounts: {
+                work: {
+                  account: "+15555550123",
+                  transport: { kind: "managed-native" },
+                },
+              },
+            },
+          },
+        },
+        accountId: "personal",
+        transport: { kind: "external-native", url: "http://localhost:8080" },
+      }),
+    ).toThrow(
+      'Signal external-native account "personal" uses local port 8080, which conflicts with managed native account "work".',
+    );
+  });
+
   it("allows a local external endpoint on a disabled sibling managed bind", () => {
     const next = writeSignalAccountTransport({
       cfg: {
