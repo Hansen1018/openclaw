@@ -82,6 +82,10 @@ public final class OpenClawChatViewModel {
     public internal(set) var sessionGroupsRevision = 0
     public internal(set) var sessionBranches: [OpenClawChatSessionBranch] = []
     public internal(set) var isLoadingSessionBranches = false
+    @ObservationIgnored
+    var sessionBranchesRefreshGeneration: UInt64 = 0
+    @ObservationIgnored
+    var isSwitchingSessionBranch = false
 
     /// True when this view model owns a gateway-scoped durable text outbox.
     public var supportsOfflineTextOutbox: Bool {

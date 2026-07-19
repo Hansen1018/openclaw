@@ -50,6 +50,9 @@ extension OpenClawChatViewModel {
                           agentId: change.agentId,
                           current: self.sessionKey)
                 else { return }
+                self.replyTarget = nil
+                self.runMessageScopesByRunID.removeAll()
+                self.provisionalFinalMessagesByID.removeAll()
                 let context = self.beginHistoryRequest()
                 Task {
                     await self.refreshHistoryAfterRun(historyRequest: context)

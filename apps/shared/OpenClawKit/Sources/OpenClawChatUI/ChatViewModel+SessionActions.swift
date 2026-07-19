@@ -396,20 +396,27 @@ extension OpenClawChatViewModel {
     }
 
     public func refreshSessionBranches() async {
-        guard !self.isLoadingSessionBranches else { return }
         let session = self.currentSessionSnapshot()
+        self.sessionBranchesRefreshGeneration &+= 1
+        let refreshGeneration = self.sessionBranchesRefreshGeneration
         self.isLoadingSessionBranches = true
         defer {
-            if self.isCurrentSession(session) {
+            if self.isCurrentSession(session),
+               refreshGeneration == self.sessionBranchesRefreshGeneration
+            {
                 self.isLoadingSessionBranches = false
             }
         }
         do {
             let response = try await self.transport.listSessionBranches(sessionKey: session.key)
-            guard self.isCurrentSession(session) else { return }
+            guard self.isCurrentSession(session),
+                  refreshGeneration == self.sessionBranchesRefreshGeneration
+            else { return }
             self.sessionBranches = response.branches
         } catch {
-            guard self.isCurrentSession(session) else { return }
+            guard self.isCurrentSession(session),
+                  refreshGeneration == self.sessionBranchesRefreshGeneration
+            else { return }
             self.sessionBranches = []
             chatSessionActionsLogger.debug(
                 "sessions.branches.list failed \(error.localizedDescription, privacy: .public)")
@@ -419,11 +426,17 @@ extension OpenClawChatViewModel {
     public func switchToBranch(_ leafEntryId: String) async {
         let normalizedLeafEntryID = leafEntryId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedLeafEntryID.isEmpty else { return }
-        guard !self.hasBlockingRunActivity, !self.isSending, !self.isAborting else { return }
+        guard !self.hasBlockingRunActivity,
+              !self.isSending,
+              !self.isAborting,
+              !self.isSwitchingSessionBranch
+        else { return }
         guard !self.sessionBranches.contains(where: {
             $0.leafEntryId == normalizedLeafEntryID && $0.active
         }) else { return }
         let initiatingSession = self.currentSessionSnapshot()
+        self.isSwitchingSessionBranch = true
+        defer { self.isSwitchingSessionBranch = false }
         do {
             try await self.transport.switchSessionBranch(
                 sessionKey: initiatingSession.key,
