@@ -65,12 +65,14 @@ private func outboxCommand(
     text: String,
     attachments: [OpenClawChatOutboxAttachment] = [],
     thinking: String = "off",
-    createdAt: Double = Date().timeIntervalSince1970) -> OpenClawChatOutboxCommand
+    createdAt: Double = Date().timeIntervalSince1970,
+    branchLeafEntryID: String? = "leaf-main") -> OpenClawChatOutboxCommand
 {
     OpenClawChatOutboxCommand(
         id: id,
         sessionKey: sessionKey,
         agentID: agentID,
+        branchLeafEntryID: branchLeafEntryID,
         text: text,
         attachments: attachments,
         thinking: thinking,
@@ -539,6 +541,12 @@ struct ChatTranscriptCacheStoreTests {
             nil) == SQLITE_OK)
         #expect(sqlite3_exec(
             raw,
+            "ALTER TABLE outbox_commands DROP COLUMN branch_leaf_entry_id",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            raw,
             "ALTER TABLE outbox_commands DROP COLUMN attachment_bytes",
             nil,
             nil,
@@ -554,6 +562,7 @@ struct ChatTranscriptCacheStoreTests {
 
         let migrated = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         let commands = await migrated.loadCommands()
+        #expect(commands.map(\.branchLeafEntryID) == [nil, nil, nil, nil, nil, nil])
         #expect(commands.map(\.agentID) == [nil, nil, nil, nil, nil, nil])
         #expect(commands.map(\.deliverySessionKey) == [
             "",
@@ -580,11 +589,13 @@ struct ChatTranscriptCacheStoreTests {
             expectedLastError: migratedGlobal.lastError,
             agentID: "agent-b",
             deliverySessionKey: "global",
-            routingContract: "per-sender|main|agent-b") == .updated)
+            routingContract: "per-sender|main|agent-b",
+            branchLeafEntryID: "leaf-b") == .updated)
         let retried = await migrated.loadCommands().first { $0.id == "c-global" }
         #expect(retried?.agentID == "agent-b")
         #expect(retried?.deliverySessionKey == "global")
         #expect(retried?.routingContract == "per-sender|main|agent-b")
+        #expect(retried?.branchLeafEntryID == "leaf-b")
         #expect(retried?.status == .queued)
         #expect(retried?.attemptVersion == migratedGlobal.attemptVersion + 1)
     }
@@ -615,7 +626,8 @@ struct ChatTranscriptCacheStoreTests {
             expectedLastError: failed.lastError,
             agentID: nil,
             deliverySessionKey: "unknown",
-            routingContract: "per-sender|main|main") == .updated)
+            routingContract: "per-sender|main|main",
+            branchLeafEntryID: "leaf-main") == .updated)
         let command = try #require(await store.loadCommands().first)
         #expect(command.status == .queued)
         #expect(command.agentID == nil)
@@ -657,7 +669,8 @@ struct ChatTranscriptCacheStoreTests {
             expectedLastError: failed.lastError,
             agentID: "agent-b",
             deliverySessionKey: "agent:agent-b:main",
-            routingContract: "per-sender|main|agent-b") == .updated)
+            routingContract: "per-sender|main|agent-b",
+            branchLeafEntryID: "leaf-b") == .updated)
         #expect(await store.loadTranscript(sessionKey: "main", agentID: "agent-a").isEmpty)
         let command = try #require(await store.loadCommands().first)
         #expect(command.agentID == "agent-b")
@@ -899,6 +912,7 @@ struct ChatCommandOutboxStoreTests {
         #expect(loaded.map(\.retryCount) == [0, 0])
         #expect(loaded.map(\.lastError) == [nil, nil])
         #expect(loaded.map(\.sessionKey) == ["main", "main"])
+        #expect(loaded.map(\.branchLeafEntryID) == ["leaf-main", "leaf-main"])
     }
 
     @Test func `claims are FIFO and exclusive until the sender advances`() async throws {
@@ -1421,7 +1435,8 @@ struct ChatCommandOutboxStoreTests {
             expectedLastError: failureBeforeParking.lastError,
             agentID: "agent-a",
             deliverySessionKey: "main",
-            routingContract: "per-sender|main|agent-a") == .unavailable)
+            routingContract: "per-sender|main|agent-a",
+            branchLeafEntryID: "leaf-a") == .superseded)
 
         let parked = try #require(await parkingStore.loadCommands().first)
         #expect(parked.status == .failed)
@@ -1434,7 +1449,8 @@ struct ChatCommandOutboxStoreTests {
             expectedLastError: parked.lastError,
             agentID: "agent-a",
             deliverySessionKey: "main",
-            routingContract: "per-sender|main|agent-a") == .updated)
+            routingContract: "per-sender|main|agent-a",
+            branchLeafEntryID: "leaf-a") == .updated)
     }
 
     @Test func `stale delivery callbacks cannot mutate a retried attempt`() async throws {
@@ -1460,7 +1476,8 @@ struct ChatCommandOutboxStoreTests {
             expectedLastError: parked.lastError,
             agentID: "agent-a",
             deliverySessionKey: "main",
-            routingContract: "per-sender|main|agent-a") == .updated)
+            routingContract: "per-sender|main|agent-a",
+            branchLeafEntryID: "leaf-a") == .updated)
         let newAttempt = try #require(await store.claimNextCommand())
         #expect(newAttempt.attemptVersion == oldAttempt.attemptVersion + 1)
 

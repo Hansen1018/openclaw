@@ -130,6 +130,9 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     /// Durable routing owner, required for the literal `global` session and
     /// retained for ownership checks on canonical agent-scoped keys.
     public let agentID: String?
+    /// Active branch leaf captured when this delivery attempt was queued.
+    /// Automatic replay fails closed when it cannot prove the leaf still owns it.
+    public let branchLeafEntryID: String?
     public let text: String
     /// Attachment bytes remain owned by SQLite until canonical history proves
     /// delivery or the user explicitly deletes the command.
@@ -152,6 +155,7 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         deliverySessionKey: String? = nil,
         routingContract: String? = nil,
         agentID: String? = nil,
+        branchLeafEntryID: String? = nil,
         text: String,
         attachments: [OpenClawChatOutboxAttachment] = [],
         thinking: String,
@@ -172,6 +176,8 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         self.routingContract = normalizedRoutingContract?.isEmpty == false ? normalizedRoutingContract : nil
         let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let normalizedBranchLeafEntryID = branchLeafEntryID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.branchLeafEntryID = normalizedBranchLeafEntryID?.isEmpty == false ? normalizedBranchLeafEntryID : nil
         self.text = text
         self.attachments = attachments
         self.thinking = thinking
@@ -187,6 +193,7 @@ public enum OpenClawChatOutboxUpdateResult: Equatable, Sendable {
     case updated
     case confirmed
     case missing
+    case superseded
     case unavailable
 }
 
@@ -253,7 +260,8 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         expectedLastError: String?,
         agentID: String?,
         deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract: String,
+        branchLeafEntryID: String) async -> OpenClawChatOutboxUpdateResult
     /// User cancellation succeeds only before a sender claims the row. The
     /// status predicate is the cross-view-model cancellation boundary.
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult
@@ -280,7 +288,8 @@ extension OpenClawChatCommandOutbox {
         expectedLastError _: String?,
         agentID _: String?,
         deliverySessionKey _: String,
-        routingContract _: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract _: String,
+        branchLeafEntryID _: String) async -> OpenClawChatOutboxUpdateResult
     {
         .unavailable
     }

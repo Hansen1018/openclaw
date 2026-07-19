@@ -111,6 +111,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     public static let outboxUnconfirmedError = "delivery_unconfirmed"
     public static let outboxUnknownTargetError = "delivery_target_unknown"
     public static let outboxChangedTargetError = "delivery_target_changed"
+    public static let outboxChangedBranchError = "delivery_branch_changed"
     private static let outboxBranchParkingMarker = "\n# branch-park:"
     // v2 adds the durable outbox; v3 adds delivery ownership; v4 binds
     // replay to the main-routing contract; v5 persists that verified identity;
@@ -125,6 +126,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         delivery_session_key TEXT NOT NULL DEFAULT '',
         routing_contract TEXT NOT NULL DEFAULT '',
         agent_id TEXT NOT NULL DEFAULT '',
+        branch_leaf_entry_id TEXT,
         text TEXT NOT NULL,
         attachments TEXT NOT NULL DEFAULT '[]',
         attachment_bytes INTEGER NOT NULL DEFAULT 0,
@@ -538,9 +540,11 @@ extension OpenClawChatSQLiteTranscriptCache {
                   sql: """
                   INSERT INTO outbox_commands(
                       client_uuid, gateway_id, session_key, delivery_session_key, routing_contract,
-                      agent_id, text, attachments, attachment_bytes, thinking, created_at, status,
-                      attempt_version, retry_count, last_error
-                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                      agent_id, branch_leaf_entry_id, text, attachments, attachment_bytes, thinking,
+                      created_at, status, attempt_version, retry_count, last_error
+                  ) VALUES (
+                      ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+                  )
                   """,
                   bindings: [
                       command.id,
@@ -549,6 +553,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                       command.deliverySessionKey,
                       command.routingContract ?? "",
                       command.agentID ?? "",
+                      command.branchLeafEntryID ?? NSNull(),
                       command.text,
                       attachments,
                       attachmentByteCount,
@@ -762,14 +767,16 @@ extension OpenClawChatSQLiteTranscriptCache {
         expectedLastError: String?,
         agentID: String?,
         deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract: String,
+        branchLeafEntryID: String) async -> OpenClawChatOutboxUpdateResult
     {
         await self.markCommandRetriedIfPresent(
             id: id,
             expectedFailure: (expectedAttemptVersion, expectedRetryCount, expectedLastError),
             agentID: agentID,
             deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract)
+            routingContract: routingContract,
+            branchLeafEntryID: branchLeafEntryID)
     }
 
     private func markCommandRetriedIfPresent(
@@ -777,17 +784,20 @@ extension OpenClawChatSQLiteTranscriptCache {
         expectedFailure: (attemptVersion: Int, retryCount: Int, lastError: String?),
         agentID: String?,
         deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract: String,
+        branchLeafEntryID: String) async -> OpenClawChatOutboxUpdateResult
     {
         guard !self.isRetired, let db = await handle() else { return .unavailable }
         let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         let normalizedDeliverySessionKey = deliverySessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedRoutingContract = routingContract.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedBranchLeafEntryID = branchLeafEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowsUntargetedAgent = normalizedRoutingContract == OpenClawChatOutboxCommand
             .legacyUnboundRoutingContract || normalizedDeliverySessionKey.lowercased() == "unknown"
         guard !normalizedAgentID.isEmpty || allowsUntargetedAgent,
               !normalizedDeliverySessionKey.isEmpty,
-              !normalizedRoutingContract.isEmpty
+              !normalizedRoutingContract.isEmpty,
+              !normalizedBranchLeafEntryID.isEmpty
         else { return .unavailable }
         guard self.execute(db, sql: "BEGIN IMMEDIATE", bindings: []) else { return .unavailable }
         var committed = false
@@ -816,14 +826,16 @@ extension OpenClawChatSQLiteTranscriptCache {
             normalizedAgentID,
             normalizedDeliverySessionKey,
             normalizedRoutingContract,
+            normalizedBranchLeafEntryID,
         ]
         let retrySQL = """
         UPDATE outbox_commands
         SET status = 'queued', attempt_version = attempt_version + 1,
             retry_count = 0, last_error = '', created_at = ?3,
-            agent_id = ?4, delivery_session_key = ?5, routing_contract = ?6
+            agent_id = ?4, delivery_session_key = ?5, routing_contract = ?6,
+            branch_leaf_entry_id = ?7
         WHERE gateway_id = ?1 AND client_uuid = ?2 AND status = 'failed'
-          AND attempt_version = ?7 AND retry_count = ?8 AND last_error = ?9
+          AND attempt_version = ?8 AND retry_count = ?9 AND last_error = ?10
         """
         retryBindings.append(expectedFailure.attemptVersion)
         retryBindings.append(expectedFailure.retryCount)
@@ -835,9 +847,9 @@ extension OpenClawChatSQLiteTranscriptCache {
             if committed {
                 // Another transition superseded the version shown at tap time.
                 // Keep its row untouched instead of letting a stale retry win.
-                return .unavailable
+                return .superseded
             }
-            return committed ? .missing : .unavailable
+            return .unavailable
         }
         // Retargeting adopts a new cache owner. Remove the optimistic row
         // from the previous partition before the command becomes sendable.
@@ -1275,7 +1287,9 @@ extension OpenClawChatSQLiteTranscriptCache {
             sqlite3_close_v2(opened)
             return nil
         }
-        guard self.ensureOutboxAttemptVersionColumn(opened) else {
+        guard self.ensureOutboxAttemptVersionColumn(opened),
+              self.ensureOutboxBranchLeafEntryIDColumn(opened)
+        else {
             sqlite3_close_v2(opened)
             return nil
         }
@@ -1498,6 +1512,24 @@ extension OpenClawChatSQLiteTranscriptCache {
         return self.table(db, hasColumn: "attempt_version", tableName: "outbox_commands")
     }
 
+    /// Additive and nullable so old rows remain readable but cannot replay
+    /// until an explicit retry binds them to the current branch.
+    private func ensureOutboxBranchLeafEntryIDColumn(_ db: OpaquePointer) -> Bool {
+        if self.table(db, hasColumn: "branch_leaf_entry_id", tableName: "outbox_commands") {
+            return true
+        }
+        if sqlite3_exec(
+            db,
+            "ALTER TABLE outbox_commands ADD COLUMN branch_leaf_entry_id TEXT",
+            nil,
+            nil,
+            nil) == SQLITE_OK
+        {
+            return true
+        }
+        return self.table(db, hasColumn: "branch_leaf_entry_id", tableName: "outbox_commands")
+    }
+
     private func migrateTranscriptTableToV3(_ db: OpaquePointer) -> Bool {
         let hadAgentID = self.table(db, hasColumn: "agent_id", tableName: "cached_transcripts")
         guard sqlite3_exec(
@@ -1566,7 +1598,8 @@ extension OpenClawChatSQLiteTranscriptCache {
         var statement: OpaquePointer?
         let sql = """
         SELECT client_uuid, session_key, delivery_session_key, routing_contract, agent_id,
-               text, attachments, thinking, created_at, status, attempt_version, retry_count, last_error
+               branch_leaf_entry_id, text, attachments, thinking, created_at, status,
+               attempt_version, retry_count, last_error
         FROM outbox_commands WHERE gateway_id = ?1
         ORDER BY created_at ASC, id ASC
         """
@@ -1579,19 +1612,20 @@ extension OpenClawChatSQLiteTranscriptCache {
         while step == SQLITE_ROW {
             if let id = sqlite3_column_text(statement, 0),
                let sessionKey = sqlite3_column_text(statement, 1),
-               let text = sqlite3_column_text(statement, 5)
+               let text = sqlite3_column_text(statement, 6)
             {
                 let deliverySessionKey = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? ""
                 let routingContract = sqlite3_column_text(statement, 3).map { String(cString: $0) }
                 let agentID = sqlite3_column_text(statement, 4).map { String(cString: $0) }
-                let attachmentsPayload = sqlite3_column_text(statement, 6).map { String(cString: $0) } ?? "[]"
+                let branchLeafEntryID = sqlite3_column_text(statement, 5).map { String(cString: $0) }
+                let attachmentsPayload = sqlite3_column_text(statement, 7).map { String(cString: $0) } ?? "[]"
                 guard let attachments = try? JSONDecoder().decode(
                     [OpenClawChatOutboxAttachment].self,
                     from: Data(attachmentsPayload.utf8))
                 else { return nil }
-                let thinking = sqlite3_column_text(statement, 7).map { String(cString: $0) } ?? ""
-                let statusRaw = sqlite3_column_text(statement, 9).map { String(cString: $0) } ?? ""
-                let lastError = sqlite3_column_text(statement, 12).map { String(cString: $0) } ?? ""
+                let thinking = sqlite3_column_text(statement, 8).map { String(cString: $0) } ?? ""
+                let statusRaw = sqlite3_column_text(statement, 10).map { String(cString: $0) } ?? ""
+                let lastError = sqlite3_column_text(statement, 13).map { String(cString: $0) } ?? ""
                 if let status = OpenClawChatOutboxCommand.Status(rawValue: statusRaw) {
                     commands.append(
                         OpenClawChatOutboxCommand(
@@ -1600,13 +1634,14 @@ extension OpenClawChatSQLiteTranscriptCache {
                             deliverySessionKey: deliverySessionKey,
                             routingContract: routingContract,
                             agentID: agentID,
+                            branchLeafEntryID: branchLeafEntryID,
                             text: String(cString: text),
                             attachments: attachments,
                             thinking: thinking,
-                            createdAt: sqlite3_column_double(statement, 8),
+                            createdAt: sqlite3_column_double(statement, 9),
                             status: status,
-                            attemptVersion: Int(sqlite3_column_int64(statement, 10)),
-                            retryCount: Int(sqlite3_column_int64(statement, 11)),
+                            attemptVersion: Int(sqlite3_column_int64(statement, 11)),
+                            retryCount: Int(sqlite3_column_int64(statement, 12)),
                             lastError: lastError.isEmpty ? nil : lastError))
                 }
             }
@@ -1684,6 +1719,8 @@ extension OpenClawChatSQLiteTranscriptCache {
                 sqlite3_bind_int64(statement, index, Int64(int))
             case let real as Double:
                 sqlite3_bind_double(statement, index, real)
+            case is NSNull:
+                sqlite3_bind_null(statement, index)
             default:
                 SQLITE_MISUSE
             }
