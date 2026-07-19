@@ -7655,6 +7655,7 @@ describe("update-cli", () => {
       },
     );
 
+    expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledTimes(1);
     expect(syncPluginCall()?.config?.channels?.whatsapp).toEqual(
       preUpdateConfig.channels?.whatsapp,
     );
