@@ -572,8 +572,12 @@ struct ChatTranscriptCacheStoreTests {
             OpenClawChatSQLiteTranscriptCache.outboxUnknownTargetError,
             OpenClawChatSQLiteTranscriptCache.outboxUnknownTargetError,
         ])
+        let migratedGlobal = try #require(commands.first { $0.id == "c-global" })
         #expect(await migrated.markCommandRetriedIfPresent(
             id: "c-global",
+            expectedAttemptVersion: migratedGlobal.attemptVersion,
+            expectedRetryCount: migratedGlobal.retryCount,
+            expectedLastError: migratedGlobal.lastError,
             agentID: "agent-b",
             deliverySessionKey: "global",
             routingContract: "per-sender|main|agent-b") == .updated)
@@ -582,6 +586,7 @@ struct ChatTranscriptCacheStoreTests {
         #expect(retried?.deliverySessionKey == "global")
         #expect(retried?.routingContract == "per-sender|main|agent-b")
         #expect(retried?.status == .queued)
+        #expect(retried?.attemptVersion == migratedGlobal.attemptVersion + 1)
     }
 
     @Test func `unknown failed command can retry without an agent`() async throws {
@@ -600,10 +605,14 @@ struct ChatTranscriptCacheStoreTests {
             status: .failed,
             retryCount: 1,
             lastError: "failed")))
-        #expect(await store.loadCommands().first?.lastError == "failed")
+        let failed = try #require(await store.loadCommands().first)
+        #expect(failed.lastError == "failed")
 
         #expect(await store.markCommandRetriedIfPresent(
             id: "c-unknown",
+            expectedAttemptVersion: failed.attemptVersion,
+            expectedRetryCount: failed.retryCount,
+            expectedLastError: failed.lastError,
             agentID: nil,
             deliverySessionKey: "unknown",
             routingContract: "per-sender|main|main") == .updated)
@@ -640,8 +649,12 @@ struct ChatTranscriptCacheStoreTests {
             retryCount: 1,
             lastError: "changed")))
 
+        let failed = try #require(await store.loadCommands().first)
         #expect(await store.markCommandRetriedIfPresent(
             id: "c-retarget",
+            expectedAttemptVersion: failed.attemptVersion,
+            expectedRetryCount: failed.retryCount,
+            expectedLastError: failed.lastError,
             agentID: "agent-b",
             deliverySessionKey: "agent:agent-b:main",
             routingContract: "per-sender|main|agent-b") == .updated)
@@ -882,6 +895,7 @@ struct ChatCommandOutboxStoreTests {
         #expect(loaded.map(\.text) == ["first", "second"])
         #expect(loaded.map(\.thinking) == ["off", "high"])
         #expect(loaded.map(\.status) == [.queued, .queued])
+        #expect(loaded.map(\.attemptVersion) == [1, 1])
         #expect(loaded.map(\.retryCount) == [0, 0])
         #expect(loaded.map(\.lastError) == [nil, nil])
         #expect(loaded.map(\.sessionKey) == ["main", "main"])
@@ -895,9 +909,12 @@ struct ChatCommandOutboxStoreTests {
         #expect(await store.enqueueCommand(outboxCommand(id: "c-1", text: "first", createdAt: now)))
         #expect(await store.enqueueCommand(outboxCommand(id: "c-2", text: "second", createdAt: now + 1)))
 
-        #expect(await store.claimNextCommand()?.id == "c-1")
+        let firstClaim = try #require(await store.claimNextCommand())
+        #expect(firstClaim.id == "c-1")
         #expect(await store.claimNextCommand() == nil)
-        #expect(await store.markCommandAwaitingConfirmation(id: "c-1") == .updated)
+        #expect(await store.markCommandAwaitingConfirmation(
+            id: "c-1",
+            attemptVersion: firstClaim.attemptVersion) == .updated)
         #expect(await store.claimNextCommand()?.id == "c-2")
     }
 
@@ -906,11 +923,12 @@ struct ChatCommandOutboxStoreTests {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         #expect(await store.enqueueCommand(outboxCommand(id: "c-1", text: "claimed")))
-        #expect(await store.claimNextCommand()?.id == "c-1")
+        let claim = try #require(await store.claimNextCommand())
+        #expect(claim.id == "c-1")
 
         #expect(await store.cancelCommand(id: "c-1") == .missing)
         #expect(await store.loadCommands().map(\.status) == [.sending])
-        #expect(await store.confirmCommand(id: "c-1") == .updated)
+        #expect(await store.confirmCommand(id: "c-1", attemptVersion: claim.attemptVersion) == .updated)
         #expect(await store.loadCommands().isEmpty)
     }
 
@@ -1100,7 +1118,8 @@ struct ChatCommandOutboxStoreTests {
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         #expect(await store.enqueueCommand(outboxCommand(id: "c-claim", text: "recover me")))
         #expect(await store.recoverInterruptedSends())
-        #expect(await store.claimNextCommand()?.id == "c-claim")
+        let claim = try #require(await store.claimNextCommand())
+        #expect(claim.id == "c-claim")
 
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
@@ -1112,7 +1131,9 @@ struct ChatCommandOutboxStoreTests {
             nil) == SQLITE_OK)
         sqlite3_close_v2(raw)
 
-        #expect(await store.markCommandAwaitingConfirmation(id: "c-claim") == .unavailable)
+        #expect(await store.markCommandAwaitingConfirmation(
+            id: "c-claim",
+            attemptVersion: claim.attemptVersion) == .unavailable)
 
         raw = nil
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
@@ -1134,7 +1155,8 @@ struct ChatCommandOutboxStoreTests {
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         #expect(await store.enqueueCommand(outboxCommand(id: "c-terminal", text: "stop retrying")))
         #expect(await store.recoverInterruptedSends())
-        #expect(await store.claimNextCommand()?.id == "c-terminal")
+        let claim = try #require(await store.claimNextCommand())
+        #expect(claim.id == "c-terminal")
 
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
@@ -1147,7 +1169,11 @@ struct ChatCommandOutboxStoreTests {
         sqlite3_close_v2(raw)
 
         #expect(
-            await store.markCommandFailedIfPresent(id: "c-terminal", retryCount: 3, lastError: "rejected") ==
+            await store.markCommandFailedIfPresent(
+                id: "c-terminal",
+                attemptVersion: claim.attemptVersion,
+                retryCount: 3,
+                lastError: "rejected") ==
                 .unavailable)
 
         raw = nil
@@ -1210,7 +1236,7 @@ struct ChatCommandOutboxStoreTests {
                 status: .sending,
                 retryCount: 0,
                 lastError: nil)))
-        #expect(await store.markCommandAwaitingConfirmation(id: "c-unconfirmed") == .updated)
+        #expect(await store.markCommandAwaitingConfirmation(id: "c-unconfirmed", attemptVersion: 1) == .updated)
 
         let loaded = await store.loadCommands()
         let stale = try #require(loaded.first { $0.id == "c-stale" })
@@ -1310,7 +1336,11 @@ struct ChatCommandOutboxStoreTests {
 
         // Cross-gateway mutations must not leak either.
         #expect(
-            await storeB.markCommandFailedIfPresent(id: "c-a", retryCount: 3, lastError: "boom") == .missing)
+            await storeB.markCommandFailedIfPresent(
+                id: "c-a",
+                attemptVersion: 1,
+                retryCount: 3,
+                lastError: "boom") == .missing)
         #expect(await storeB.cancelCommand(id: "c-a") == .missing)
         let survivors = await storeA.loadCommands()
         #expect(survivors.map(\.id) == ["c-a"])
@@ -1371,9 +1401,11 @@ struct ChatCommandOutboxStoreTests {
             sessionKey: "main",
             agentID: "agent-a",
             text: "do not cross branches")))
-        #expect(await parkingStore.claimNextCommand()?.id == "c-race")
+        let initialAttempt = try #require(await parkingStore.claimNextCommand())
+        #expect(initialAttempt.id == "c-race")
         #expect(await parkingStore.markCommandFailedIfPresent(
             id: "c-race",
+            attemptVersion: initialAttempt.attemptVersion,
             retryCount: 2,
             lastError: "previous failure") == .updated)
         let failureBeforeParking = try #require(await parkingStore.loadCommands().first)
@@ -1384,6 +1416,7 @@ struct ChatCommandOutboxStoreTests {
             lastError: "branch changed"))
         #expect(await retryStore.markCommandRetriedIfPresent(
             id: "c-race",
+            expectedAttemptVersion: failureBeforeParking.attemptVersion,
             expectedRetryCount: failureBeforeParking.retryCount,
             expectedLastError: failureBeforeParking.lastError,
             agentID: "agent-a",
@@ -1396,11 +1429,58 @@ struct ChatCommandOutboxStoreTests {
         #expect(OpenClawChatSQLiteTranscriptCache.outboxDisplayError(parked.lastError) == "branch changed")
         #expect(await retryStore.markCommandRetriedIfPresent(
             id: "c-race",
+            expectedAttemptVersion: parked.attemptVersion,
             expectedRetryCount: parked.retryCount,
             expectedLastError: parked.lastError,
             agentID: "agent-a",
             deliverySessionKey: "main",
             routingContract: "per-sender|main|agent-a") == .updated)
+    }
+
+    @Test func `stale delivery callbacks cannot mutate a retried attempt`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "c-attempt",
+            sessionKey: "main",
+            agentID: "agent-a",
+            text: "send once")))
+        let oldAttempt = try #require(await store.claimNextCommand())
+
+        _ = try #require(await store.failPendingCommands(
+            sessionKey: "main",
+            agentID: "agent-a",
+            lastError: "branch changed"))
+        let parked = try #require(await store.loadCommands().first)
+        #expect(await store.markCommandRetriedIfPresent(
+            id: parked.id,
+            expectedAttemptVersion: parked.attemptVersion,
+            expectedRetryCount: parked.retryCount,
+            expectedLastError: parked.lastError,
+            agentID: "agent-a",
+            deliverySessionKey: "main",
+            routingContract: "per-sender|main|agent-a") == .updated)
+        let newAttempt = try #require(await store.claimNextCommand())
+        #expect(newAttempt.attemptVersion == oldAttempt.attemptVersion + 1)
+
+        #expect(await store.markCommandFailedIfPresent(
+            id: oldAttempt.id,
+            attemptVersion: oldAttempt.attemptVersion,
+            retryCount: 3,
+            lastError: "stale failure") == .missing)
+        #expect(await store.markCommandAwaitingConfirmation(
+            id: oldAttempt.id,
+            attemptVersion: oldAttempt.attemptVersion) == .missing)
+        #expect(await store.confirmCommand(
+            id: oldAttempt.id,
+            attemptVersion: oldAttempt.attemptVersion) == .missing)
+
+        let current = try #require(await store.loadCommands().first)
+        #expect(current.status == .sending)
+        #expect(current.attemptVersion == newAttempt.attemptVersion)
+        #expect(current.retryCount == newAttempt.retryCount)
+        #expect(current.lastError == newAttempt.lastError)
     }
 
     @Test func `retry and failure marks persist retry count and last error`() async throws {
@@ -1409,15 +1489,23 @@ struct ChatCommandOutboxStoreTests {
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         #expect(await store.enqueueCommand(outboxCommand(id: "c-1", text: "retry me")))
 
-        await store.markCommandQueued(id: "c-1", retryCount: 2, lastError: "socket closed")
+        let firstAttempt = try #require(await store.claimNextCommand())
+        #expect(await store.markCommandQueued(
+            id: "c-1",
+            attemptVersion: firstAttempt.attemptVersion,
+            retryCount: 2,
+            lastError: "socket closed") == .updated)
         var loaded = await store.loadCommands()
         #expect(loaded.map(\.status) == [.queued])
         #expect(loaded.map(\.retryCount) == [2])
         #expect(loaded.map(\.lastError) == ["socket closed"])
+        #expect(loaded.map(\.attemptVersion) == [firstAttempt.attemptVersion + 1])
 
-        #expect(await store.claimNextCommand()?.id == "c-1")
+        let secondAttempt = try #require(await store.claimNextCommand())
+        #expect(secondAttempt.id == "c-1")
         #expect(await store.markCommandFailedIfPresent(
             id: "c-1",
+            attemptVersion: secondAttempt.attemptVersion,
             retryCount: 3,
             lastError: "gave up") == .updated)
         loaded = await store.loadCommands()

@@ -140,6 +140,9 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     /// Seconds since 1970; flush order is strictly ascending `createdAt`.
     public let createdAt: Double
     public var status: Status
+    /// Immutable ownership token for one delivery lifecycle. Every automatic
+    /// or user-initiated retry increments it before another send can start.
+    public let attemptVersion: Int
     public var retryCount: Int
     public var lastError: String?
 
@@ -154,6 +157,7 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         thinking: String,
         createdAt: Double,
         status: Status,
+        attemptVersion: Int = 1,
         retryCount: Int,
         lastError: String?)
     {
@@ -173,6 +177,7 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         self.thinking = thinking
         self.createdAt = createdAt
         self.status = status
+        self.attemptVersion = attemptVersion
         self.retryCount = retryCount
         self.lastError = lastError
     }
@@ -214,12 +219,21 @@ public protocol OpenClawChatCommandOutbox: Sendable {
     /// Atomically claims the oldest queued row when no other row is sending.
     /// Nil means another flusher owns the queue or no deliverable row remains.
     func claimNextCommand() async -> OpenClawChatOutboxCommand?
-    func markCommandQueued(id: String, retryCount: Int, lastError: String?) async
-    func markCommandAwaitingConfirmation(id: String) async -> OpenClawChatOutboxUpdateResult
+    /// Safe automatic retry: only the completing attempt may requeue the row,
+    /// and a successful requeue mints the next attempt version atomically.
+    func markCommandQueued(
+        id: String,
+        attemptVersion: Int,
+        retryCount: Int,
+        lastError: String?) async -> OpenClawChatOutboxUpdateResult
+    func markCommandAwaitingConfirmation(
+        id: String,
+        attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult
     /// Result-bearing terminal transition for callers that must stop their
     /// FIFO when durable storage is unavailable.
     func markCommandFailedIfPresent(
         id: String,
+        attemptVersion: Int,
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
     /// Parks every unresolved row for one presentation session and agent owner,
@@ -230,17 +244,11 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         sessionKey: String,
         agentID: String?,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
-    /// Result-bearing retry used to adopt an unowned legacy alias into the
-    /// canonical target explicitly selected by the user.
-    func markCommandRetriedIfPresent(
-        id: String,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
     /// Retry only if the failed row still matches the version shown to the user.
     /// The default fails closed so a store cannot bypass branch-change parking.
     func markCommandRetriedIfPresent(
         id: String,
+        expectedAttemptVersion: Int,
         expectedRetryCount: Int,
         expectedLastError: String?,
         agentID: String?,
@@ -249,9 +257,9 @@ public protocol OpenClawChatCommandOutbox: Sendable {
     /// User cancellation succeeds only before a sender claims the row. The
     /// status predicate is the cross-view-model cancellation boundary.
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult
-    /// Canonical gateway history may complete any row, including a sending
-    /// row whose request ACK was lost.
-    func confirmCommand(id: String) async -> OpenClawChatOutboxUpdateResult
+    /// Canonical gateway history may complete the matching attempt, including
+    /// a sending row whose request ACK was lost.
+    func confirmCommand(id: String, attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult
     /// Cross-view-model invalidation.
     func changes() -> AsyncStream<OpenClawChatOutboxChange>
 }
@@ -267,6 +275,7 @@ extension OpenClawChatCommandOutbox {
 
     public func markCommandRetriedIfPresent(
         id _: String,
+        expectedAttemptVersion _: Int,
         expectedRetryCount _: Int,
         expectedLastError _: String?,
         agentID _: String?,
