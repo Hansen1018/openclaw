@@ -204,6 +204,29 @@ describe("resolveSignalAccount", () => {
     );
   });
 
+  it("rejects an explicit managed port used by a local external endpoint", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            proxy: {
+              account: "+15555550123",
+              transport: { kind: "container", url: "http://localhost:8181" },
+            },
+            work: {
+              account: "+15555550124",
+              transport: { kind: "managed-native", httpPort: 8181 },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(() => resolveSignalAccount({ cfg, accountId: "work" })).toThrow(
+      'Signal managed native account "work" binds port 8181, which conflicts with account "proxy" local transport endpoint.',
+    );
+  });
+
   it("does not let an unconfigured placeholder consume a managed port", () => {
     const cfg = {
       channels: {

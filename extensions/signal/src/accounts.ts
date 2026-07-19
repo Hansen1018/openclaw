@@ -89,22 +89,39 @@ function resolveSignalManagedNativePort(params: {
   transport: SignalTransportConfig | undefined;
 }): number {
   if (params.transport?.kind === "managed-native" && params.transport.httpPort !== undefined) {
+    const explicitPort = params.transport.httpPort;
     for (const accountId of listSignalAccountIds(params.cfg)) {
       if (normalizeAccountId(accountId) === params.accountId) {
         continue;
       }
       const accountConfig = mergeSignalAccountConfig(params.cfg, accountId);
+      if (!isSignalAccountConfigured(accountConfig)) {
+        continue;
+      }
+      const transport = accountConfig.transport;
+      if (transport?.kind === "managed-native" && transport.httpPort === explicitPort) {
+        throw new Error(
+          `Signal managed native accounts "${params.accountId}" and "${accountId}" both bind port ${explicitPort}. Assign each account a distinct transport.httpPort.`,
+        );
+      }
+      const independentLocalUrl =
+        transport?.kind === "external-native" ||
+        transport?.kind === "container" ||
+        (transport?.kind === "managed-native" &&
+          Boolean(transport.url) &&
+          !isSignalManagedNativeConnectionUrlForBind(transport))
+          ? transport.url
+          : undefined;
       if (
-        isSignalAccountConfigured(accountConfig) &&
-        accountConfig.transport?.kind === "managed-native" &&
-        accountConfig.transport.httpPort === params.transport.httpPort
+        independentLocalUrl &&
+        resolveLocalSignalTransportPort(independentLocalUrl) === explicitPort
       ) {
         throw new Error(
-          `Signal managed native accounts "${params.accountId}" and "${accountId}" both bind port ${params.transport.httpPort}. Assign each account a distinct transport.httpPort.`,
+          `Signal managed native account "${params.accountId}" binds port ${explicitPort}, which conflicts with account "${accountId}" local transport endpoint. Assign a distinct transport.httpPort.`,
         );
       }
     }
-    return params.transport.httpPort;
+    return explicitPort;
   }
 
   const reservedPorts = new Set<number>();

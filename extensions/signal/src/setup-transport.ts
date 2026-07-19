@@ -45,7 +45,7 @@ function normalizeTransport(transport: SignalTransportConfig): SignalTransportCo
   return { ...transport, url: normalizeSignalTransportUrl(transport.url) };
 }
 
-function configuredTransportForAccount(
+export function resolveConfiguredSignalTransport(
   cfg: OpenClawConfig,
   accountId: string,
 ): SignalTransportConfig | undefined {
@@ -92,7 +92,7 @@ export function prepareSignalManagedNativeTransport(params: {
   accountId: string;
   overrides?: Omit<SignalManagedNativeTransport, "kind">;
 }): SignalManagedNativeTransport {
-  const existing = configuredTransportForAccount(params.cfg, params.accountId);
+  const existing = resolveConfiguredSignalTransport(params.cfg, params.accountId);
   const existingManaged = existing?.kind === "managed-native" ? existing : undefined;
   const preferredPort = params.overrides?.httpPort ?? existingManaged?.httpPort;
   const prepared: SignalManagedNativeTransport = {

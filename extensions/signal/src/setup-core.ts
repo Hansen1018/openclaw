@@ -32,6 +32,7 @@ import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.
 import { migrateLegacySignalTransportConfigSync } from "./config-compat.js";
 import {
   prepareSignalManagedNativeTransport,
+  resolveConfiguredSignalTransport,
   writeSignalAccountTransport,
 } from "./setup-transport.js";
 import { isValidSignalManagedNativePort } from "./transport-policy.js";
@@ -390,21 +391,16 @@ export const signalSetupAdapter: ChannelSetupAdapter = {
           transport: rootTransport ?? nestedDefaultTransport,
         })
       : recoveredCfg;
-    const previousTransport = resolveSignalAccount({
-      cfg,
-      accountId,
-    }).config.transport;
+    // Setup must be able to replace a hand-authored duplicate bind before runtime validation.
+    const previousTransport = resolveConfiguredSignalTransport(cfg, accountId);
     const next = signalSetupAdapterBase.applyAccountConfig?.({ ...params, cfg, accountId }) ?? cfg;
-    const account = resolveSignalAccount({ cfg: next, accountId });
-    const configuredTransport = account.config.transport;
-    if (account.transport.kind !== "managed-native") {
-      return configuredTransport
-        ? writeSignalAccountTransport({
-            cfg: next,
-            accountId,
-            transport: configuredTransport,
-          })
-        : next;
+    const configuredTransport = resolveConfiguredSignalTransport(next, accountId);
+    if (configuredTransport && configuredTransport.kind !== "managed-native") {
+      return writeSignalAccountTransport({
+        cfg: next,
+        accountId,
+        transport: configuredTransport,
+      });
     }
     return writeSignalAccountTransport({
       cfg: next,

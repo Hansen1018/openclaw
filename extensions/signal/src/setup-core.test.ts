@@ -9,6 +9,34 @@ import {
 import { signalSetupWizard } from "./setup-surface.js";
 
 describe("signalSetupAdapter", () => {
+  it("repairs a duplicate explicit managed port before runtime resolution", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              personal: {
+                account: "+15555550123",
+                transport: { kind: "managed-native", httpPort: 8181 },
+              },
+              work: {
+                account: "+15555550124",
+                transport: { kind: "managed-native", httpPort: 8181 },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      input: { httpPort: "8282" },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work?.transport).toMatchObject({
+      kind: "managed-native",
+      httpPort: 8282,
+    });
+  });
+
   it("uses the setup transport allocator for a second managed account", () => {
     const cfg: OpenClawConfig = {
       channels: {
