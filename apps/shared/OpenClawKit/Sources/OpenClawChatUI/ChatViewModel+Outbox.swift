@@ -43,6 +43,32 @@ extension OpenClawChatViewModel {
         self.outboxStatesByMessageID[messageID]
     }
 
+    var hasPendingOutboxCommandsForCurrentSession: Bool {
+        self.outbox != nil &&
+            (!self.hasRestoredOutboxMessages || self.outboxStatesByMessageID.values.contains { !$0.isFailed })
+    }
+
+    var hasUnresolvedOutboxCommandsForCurrentSession: Bool {
+        self.outbox != nil && (!self.hasRestoredOutboxMessages || !self.outboxStatesByMessageID.isEmpty)
+    }
+
+    func failPendingOutboxCommandsForBranchChange(_ session: SessionSnapshot) async -> Bool {
+        guard let outbox else { return true }
+        self.outboxPresentationGeneration &+= 1
+        self.outboxRetryTask?.cancel()
+        let reason = "Session branch changed; review and retry this message."
+        guard let commands = await outbox.failPendingCommands(
+            sessionKey: session.key,
+            lastError: reason)
+        else {
+            self.applyTransportHealth(false)
+            return false
+        }
+        guard self.isCurrentSession(session) else { return true }
+        self.presentOutboxCommands(commands.filter { self.commandMatchesTarget($0, session: session) })
+        return true
+    }
+
     /// Tap-to-retry for a failed command: reset attempts, refresh createdAt
     /// (so even an expired row can send again), and flush if healthy.
     public func retryOutboxMessage(_ messageID: UUID) {
@@ -489,6 +515,7 @@ extension OpenClawChatViewModel {
 
     func flushOutboxIfNeeded() {
         guard self.outbox != nil, self.healthOK else { return }
+        guard !self.isSwitchingSessionBranch else { return }
         // Health is intentionally established before sessions.list. Replays
         // need the current connection's model/runtime metadata first.
         guard self.hasCurrentSessionMetadata else { return }
@@ -561,6 +588,7 @@ extension OpenClawChatViewModel {
             let visibleSession = self.currentSessionSnapshot()
             self.presentOutboxCommands(commands.filter { self.commandMatchesTarget($0, session: visibleSession) })
             guard let next = await outbox.claimNextCommand() else { break }
+            guard presentationGeneration == self.outboxPresentationGeneration else { continue }
             if self.transport.outboxRequiresSessionRoutingContract,
                next.routingContract != routeLease.sessionRoutingContract
             {
@@ -575,6 +603,7 @@ extension OpenClawChatViewModel {
                 canonicalSessionKey: next.deliverySessionKey,
                 agentID: next.agentID,
                 sessionRoutingContract: next.routingContract)
+            guard presentationGeneration == self.outboxPresentationGeneration else { continue }
             self.setOutboxState(.sending, forCommandID: next.id)
             switch await self.deliverOutboxCommand(next, outbox: outbox, routeLease: routeLease) {
             case .continueFlush:

@@ -449,8 +449,7 @@ extension OpenClawChatViewModel {
             }
         }
 
-        let mustPreserveOutboxOrder = !hasRestoredOutboxMessages ||
-            outboxStatesByMessageID.values.contains(where: { !$0.isFailed })
+        let mustPreserveOutboxOrder = self.hasPendingOutboxCommandsForCurrentSession
         let attachmentDecision = await attachmentPersistenceDecision(
             draft,
             mustPreserveOutboxOrder: mustPreserveOutboxOrder)

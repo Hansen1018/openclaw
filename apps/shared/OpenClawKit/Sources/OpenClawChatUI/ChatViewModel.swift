@@ -176,7 +176,6 @@ public final class OpenClawChatViewModel {
     /// visible session. Until then the in-memory outbox state is blind to
     /// rows persisted by an earlier process, so the FIFO send gate must
     /// assume a backlog exists.
-    @ObservationIgnored
     var hasRestoredOutboxMessages = false
     @ObservationIgnored
     nonisolated(unsafe) var outboxRetryTask: Task<Void, Never>?
@@ -807,15 +806,25 @@ extension OpenClawChatViewModel {
     func endSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) {
         guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
         self.sessionBranchSwitchActivity = nil
+        self.flushOutboxIfNeeded()
     }
 
-    func reconcileSessionBranchChange(_ activity: SessionBranchSwitchActivity) async {
-        var stateApplied = false
-        for _ in 0..<2 {
-            stateApplied = await self.refreshHistoryAfterRun(
-                historyRequest: self.beginHistoryRequest(for: activity.session)).applied
-            guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
-            if stateApplied { break }
+    func reconcileSessionBranchChange(
+        _ activity: SessionBranchSwitchActivity,
+        failPendingOutboxCommands: Bool = false) async
+    {
+        var stateApplied = true
+        if failPendingOutboxCommands {
+            stateApplied = await self.failPendingOutboxCommandsForBranchChange(activity.session)
+        }
+        guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+        if stateApplied {
+            for _ in 0..<2 {
+                stateApplied = await self.refreshHistoryAfterRun(
+                    historyRequest: self.beginHistoryRequest(for: activity.session)).applied
+                guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+                if stateApplied { break }
+            }
         }
         if stateApplied {
             stateApplied = await self.refreshSessionBranches()

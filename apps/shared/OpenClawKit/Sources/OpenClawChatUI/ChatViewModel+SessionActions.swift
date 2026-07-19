@@ -425,13 +425,17 @@ extension OpenClawChatViewModel {
         }
     }
 
+    var canSwitchSessionBranch: Bool {
+        !self.hasBlockingRunActivity &&
+            !self.isSending &&
+            !self.isAborting &&
+            !self.hasUnresolvedOutboxCommandsForCurrentSession
+    }
+
     public func switchToBranch(_ leafEntryId: String) async {
         let normalizedLeafEntryID = leafEntryId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedLeafEntryID.isEmpty else { return }
-        guard !self.hasBlockingRunActivity,
-              !self.isSending,
-              !self.isAborting
-        else { return }
+        guard self.canSwitchSessionBranch else { return }
         guard !self.sessionBranches.contains(where: {
             $0.leafEntryId == normalizedLeafEntryID && $0.active
         }) else { return }

@@ -667,7 +667,8 @@ extension OpenClawChatSQLiteTranscriptCache {
             db,
             sql: """
             UPDATE outbox_commands SET status = 'failed', retry_count = ?3, last_error = ?4
-            WHERE gateway_id = ?1 AND client_uuid = ?2 AND status = 'sending'
+            WHERE gateway_id = ?1 AND client_uuid = ?2
+              AND status IN ('queued', 'sending', 'awaiting_confirmation')
             """,
             bindings: [self.gatewayID, id, retryCount, lastError ?? ""])
         guard updated else {
@@ -677,6 +678,29 @@ extension OpenClawChatSQLiteTranscriptCache {
             return .unavailable
         }
         return sqlite3_changes(db) > 0 ? .updated : .missing
+    }
+
+    public func failPendingCommands(
+        sessionKey: String,
+        lastError: String) async -> [OpenClawChatOutboxCommand]?
+    {
+        guard !self.isRetired, let db = await handle() else {
+            self.hasRecoveredInterruptedSends = false
+            return nil
+        }
+        guard self.execute(
+            db,
+            sql: """
+            UPDATE outbox_commands SET status = 'failed', last_error = ?3
+            WHERE gateway_id = ?1 AND session_key = ?2
+              AND status IN ('queued', 'sending', 'awaiting_confirmation')
+            """,
+            bindings: [self.gatewayID, sessionKey, lastError])
+        else {
+            self.hasRecoveredInterruptedSends = false
+            return nil
+        }
+        return self.readCommands(db)
     }
 
     public func markCommandRetriedIfPresent(

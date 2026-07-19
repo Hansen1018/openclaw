@@ -614,7 +614,7 @@ struct OpenClawChatComposer: View {
         .controlSize(.small)
         .help("Branches")
         .accessibilityLabel("Branches")
-        .disabled(self.messageSessionActionsDisabled)
+        .disabled(!self.viewModel.canSwitchSessionBranch)
     }
 
     private func branchTitle(_ branch: OpenClawChatSessionBranch) -> String {

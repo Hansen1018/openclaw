@@ -23,6 +23,23 @@ private func outboxTestCommand(id: String, text: String, createdAt: Double) -> O
         lastError: nil)
 }
 
+private func outboxTestBranches(activeLeafEntryID: String) -> [OpenClawChatSessionBranch] {
+    [
+        OpenClawChatSessionBranch(
+            leafEntryId: "leaf-active",
+            headline: "Previous branch",
+            messageCount: 1,
+            updatedAt: nil,
+            active: activeLeafEntryID == "leaf-active"),
+        OpenClawChatSessionBranch(
+            leafEntryId: "leaf-new",
+            headline: "Current branch",
+            messageCount: 2,
+            updatedAt: nil,
+            active: activeLeafEntryID == "leaf-new"),
+    ]
+}
+
 private func userTexts(_ vm: OpenClawChatViewModel) async -> [String] {
     await MainActor.run {
         vm.messages
@@ -96,6 +113,7 @@ private actor OutboxTransportState {
     var sentAgentIDs: [String?] = []
     var historyRequestAgentIDs: [String?] = []
     var sentThinkingLevels: [String] = []
+    var switchedBranchLeafEntryIDs: [String] = []
 
     init(healthy: Bool, sendFails: Bool) {
         self.healthy = healthy
@@ -159,6 +177,10 @@ private actor OutboxTransportState {
         self.sentMessages.append(message)
         self.sentIdempotencyKeys.append(idempotencyKey)
         self.sentThinkingLevels.append(thinking)
+    }
+
+    func recordBranchSwitch(_ leafEntryID: String) {
+        self.switchedBranchLeafEntryIDs.append(leafEntryID)
     }
 }
 
@@ -409,6 +431,14 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
         await self.state.healthy
+    }
+
+    func listSessionBranches(sessionKey _: String) async throws -> OpenClawChatSessionBranchesResponse {
+        OpenClawChatSessionBranchesResponse(branches: outboxTestBranches(activeLeafEntryID: "leaf-new"))
+    }
+
+    func switchSessionBranch(sessionKey _: String, leafEntryId: String) async throws {
+        await self.state.recordBranchSwitch(leafEntryId)
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -845,6 +875,86 @@ struct ChatViewModelOutboxTests {
             }
         }
         #expect(await userTexts(ownerlessColdOpen) == ["hello offline"])
+    }
+
+    @Test func `branch switch waits for current session outbox confirmation`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("outbox restore completes") {
+            await MainActor.run { vm.hasRestoredOutboxMessages }
+        }
+        try await sendWhileOffline(vm, text: "stay on this branch")
+        await MainActor.run {
+            vm.sessionBranches = outboxTestBranches(activeLeafEntryID: "leaf-active")
+        }
+
+        await vm.switchToBranch("leaf-new")
+        #expect(await transport.state.switchedBranchLeafEntryIDs.isEmpty)
+        #expect(await MainActor.run { !vm.canSwitchSessionBranch })
+
+        let command = try #require(await store.loadCommands().first)
+        await vm.confirmOutboxCommandsNow(in: [OpenClawChatMessage(
+            role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: command.text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil)],
+            timestamp: 1,
+            idempotencyKey: "\(command.id):user")])
+        await transport.state.setHealthy(true)
+
+        #expect(await MainActor.run { vm.canSwitchSessionBranch })
+        await vm.switchToBranch("leaf-new")
+        #expect(await transport.state.switchedBranchLeafEntryIDs == ["leaf-new"])
+    }
+
+    @Test func `remote branch switch parks pending outbox command without replay`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("outbox restore completes") {
+            await MainActor.run { vm.hasRestoredOutboxMessages }
+        }
+        try await sendWhileOffline(vm, text: "do not replay")
+        await transport.state.setHealthy(true)
+        await MainActor.run {
+            vm.handleTransportEvent(.sessionsChanged(.init(
+                sessionKey: "main",
+                reason: "branch-switch")))
+        }
+
+        try await waitUntil("remote switch parks queued command") {
+            await store.loadCommands().first?.status == .failed
+        }
+        try await waitUntil("failed outbox affordance appears") {
+            await MainActor.run {
+                vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
+            }
+        }
+        try await waitUntil("remote branch reconciliation completes") {
+            await MainActor.run { !vm.isSwitchingSessionBranch }
+        }
+        #expect(await MainActor.run { !vm.canSwitchSessionBranch })
+        await transport.goOnline()
+        try await waitUntil("post-switch outbox flush settles") {
+            await MainActor.run {
+                vm.healthOK && vm.hasCurrentSessionMetadata && !vm.isFlushingOutbox
+            }
+        }
+
+        #expect(await store.loadCommands().first?.status == .failed)
+        #expect(await transport.state.sentMessages.isEmpty)
     }
 
     @Test func `unsupported gateway keeps queued work and surfaces upgrade action`() async throws {

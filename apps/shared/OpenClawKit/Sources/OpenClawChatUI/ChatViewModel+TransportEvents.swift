@@ -58,7 +58,9 @@ extension OpenClawChatViewModel {
                     let switchActivity = self.beginSessionBranchSwitchActivity(for: context.session)
                     Task {
                         defer { self.endSessionBranchSwitchActivity(switchActivity) }
-                        await self.reconcileSessionBranchChange(switchActivity)
+                        await self.reconcileSessionBranchChange(
+                            switchActivity,
+                            failPendingOutboxCommands: true)
                     }
                     return
                 }
