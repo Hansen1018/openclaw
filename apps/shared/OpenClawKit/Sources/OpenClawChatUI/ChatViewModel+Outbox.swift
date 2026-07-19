@@ -54,6 +54,7 @@ extension OpenClawChatViewModel {
 
     func failPendingOutboxCommandsForBranchChange(_ session: SessionSnapshot) async -> Bool {
         guard let outbox else { return true }
+        self.isOutboxReplaySuppressedAfterBranchParkingFailure = true
         let agentID = self.outboxAgentID(for: session)
         guard !self.outboxRequiresAgentID(for: session) || agentID != nil else { return false }
         self.outboxPresentationGeneration &+= 1
@@ -67,6 +68,7 @@ extension OpenClawChatViewModel {
             self.applyTransportHealth(false)
             return false
         }
+        self.isOutboxReplaySuppressedAfterBranchParkingFailure = false
         guard self.isCurrentSession(session) else { return true }
         self.presentOutboxCommands(commands.filter { self.commandMatchesTarget($0, session: session) })
         return true
@@ -75,7 +77,11 @@ extension OpenClawChatViewModel {
     /// Tap-to-retry for a failed command: reset attempts, refresh createdAt
     /// (so even an expired row can send again), and flush if healthy.
     public func retryOutboxMessage(_ messageID: UUID) {
-        guard let outbox, let commandID = self.outboxCommandIDsByMessageID[messageID] else { return }
+        guard !self.isSwitchingSessionBranch,
+              let outbox,
+              let commandID = self.outboxCommandIDsByMessageID[messageID],
+              let failureVersion = self.outboxFailureVersionsByMessageID[messageID]
+        else { return }
         let session = self.currentSessionSnapshot()
         Task { [weak self] in
             guard let self else { return }
@@ -93,6 +99,8 @@ extension OpenClawChatViewModel {
             }
             let result = await outbox.markCommandRetriedIfPresent(
                 id: commandID,
+                expectedRetryCount: failureVersion.retryCount,
+                expectedLastError: failureVersion.lastError,
                 agentID: agentID,
                 deliverySessionKey: deliverySessionKey,
                 routingContract: routingContract)
@@ -105,6 +113,7 @@ extension OpenClawChatViewModel {
             switch result {
             case .updated:
                 self.outboxStatesByMessageID[messageID] = .queued
+                self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
             case .missing, .confirmed:
                 self.clearOutboxState(forCommandID: commandID)
             case .unavailable:
@@ -155,6 +164,7 @@ extension OpenClawChatViewModel {
             self.outboxCommandIDsByMessageID.removeValue(forKey: messageID)
             self.outboxMessageIDsByCommandID.removeValue(forKey: commandID)
             self.outboxStatesByMessageID.removeValue(forKey: messageID)
+            self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
             // `.missing` with no current row means another view already
             // canceled (or canonical history completed) this mapping. Never
             // leave its stale bubble looking like an ordinary sent message;
@@ -305,6 +315,7 @@ extension OpenClawChatViewModel {
         self.outboxCommandIDsByMessageID.removeAll()
         self.outboxMessageIDsByCommandID.removeAll()
         self.outboxStatesByMessageID.removeAll()
+        self.outboxFailureVersionsByMessageID.removeAll()
     }
 
     /// Re-adopts or re-appends queued bubbles for the visible session after
@@ -459,6 +470,11 @@ extension OpenClawChatViewModel {
         self.outboxCommandIDsByMessageID[messageID] = command.id
         self.outboxMessageIDsByCommandID[command.id] = messageID
         self.outboxStatesByMessageID[messageID] = Self.outboxDisplayState(for: command)
+        if command.status == .failed {
+            self.outboxFailureVersionsByMessageID[messageID] = (command.retryCount, command.lastError)
+        } else {
+            self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
+        }
     }
 
     private func pruneOutboxMappings() {
@@ -471,6 +487,7 @@ extension OpenClawChatViewModel {
                 self.outboxMessageIDsByCommandID.removeValue(forKey: commandID)
             }
             self.outboxStatesByMessageID.removeValue(forKey: messageID)
+            self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
         }
     }
 
@@ -518,6 +535,7 @@ extension OpenClawChatViewModel {
 
     func flushOutboxIfNeeded() {
         guard self.outbox != nil, self.healthOK else { return }
+        guard !self.isOutboxReplaySuppressedAfterBranchParkingFailure else { return }
         guard !self.isSwitchingSessionBranch else { return }
         // Health is intentionally established before sessions.list. Replays
         // need the current connection's model/runtime metadata first.
@@ -769,8 +787,9 @@ extension OpenClawChatViewModel {
             lastError: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
         switch update {
         case .updated:
-            self.setOutboxState(
-                .failed(reason: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError),
+            self.setOutboxFailureState(
+                reason: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError,
+                retryCount: command.retryCount,
                 forCommandID: command.id)
         case .missing, .confirmed:
             self.clearOutboxState(forCommandID: command.id)
@@ -794,7 +813,11 @@ extension OpenClawChatViewModel {
         }
         if update == .updated {
             let reason = "Gateway session routing changed; review and retry this message."
-            self.setOutboxState(.failed(reason: reason), forCommandID: command.id)
+            self.setOutboxFailureState(
+                reason: reason,
+                retryCount: command.retryCount,
+                durableLastError: OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError,
+                forCommandID: command.id)
         } else {
             self.clearOutboxState(forCommandID: command.id)
         }
@@ -821,7 +844,10 @@ extension OpenClawChatViewModel {
                 return false
             }
             if update == .updated {
-                self.setOutboxState(.failed(reason: reason), forCommandID: command.id)
+                self.setOutboxFailureState(
+                    reason: reason,
+                    retryCount: attempts,
+                    forCommandID: command.id)
             } else {
                 // Canonical history may have removed the claimed row while
                 // the rejection was in flight.
@@ -952,12 +978,27 @@ extension OpenClawChatViewModel {
     private func setOutboxState(_ state: OpenClawChatOutboxMessageState, forCommandID commandID: String) {
         guard let messageID = self.outboxMessageIDsByCommandID[commandID] else { return }
         self.outboxStatesByMessageID[messageID] = state
+        if !state.isFailed {
+            self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
+        }
+    }
+
+    private func setOutboxFailureState(
+        reason: String?,
+        retryCount: Int,
+        durableLastError: String? = nil,
+        forCommandID commandID: String)
+    {
+        guard let messageID = self.outboxMessageIDsByCommandID[commandID] else { return }
+        self.outboxStatesByMessageID[messageID] = .failed(reason: reason)
+        self.outboxFailureVersionsByMessageID[messageID] = (retryCount, durableLastError ?? reason)
     }
 
     private func clearOutboxState(forCommandID commandID: String) {
         guard let messageID = self.outboxMessageIDsByCommandID.removeValue(forKey: commandID) else { return }
         self.outboxCommandIDsByMessageID.removeValue(forKey: messageID)
         self.outboxStatesByMessageID.removeValue(forKey: messageID)
+        self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
     }
 
     func handleOutboxChange(_ change: OpenClawChatOutboxChange) {
@@ -998,7 +1039,7 @@ extension OpenClawChatViewModel {
         case .awaitingConfirmation:
             .confirming
         case .failed:
-            .failed(reason: command.lastError)
+            .failed(reason: OpenClawChatSQLiteTranscriptCache.outboxDisplayError(command.lastError))
         }
     }
 

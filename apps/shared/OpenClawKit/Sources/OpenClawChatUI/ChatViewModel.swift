@@ -155,6 +155,8 @@ public final class OpenClawChatViewModel {
     var outboxCommandIDsByMessageID: [UUID: String] = [:]
     @ObservationIgnored
     var outboxMessageIDsByCommandID: [String: UUID] = [:]
+    @ObservationIgnored
+    var outboxFailureVersionsByMessageID: [UUID: (retryCount: Int, lastError: String?)] = [:]
     /// Recent canonical keys let the MainActor resolve proof that arrives
     /// after SQLite cancellation commits but before its UI continuation runs.
     @ObservationIgnored
@@ -163,6 +165,10 @@ public final class OpenClawChatViewModel {
     var isFlushingOutbox = false
     @ObservationIgnored
     var isOutboxFlushRequestedWhileActive = false
+    /// A failed remote branch park must not be undone by bootstrap health recovery.
+    /// Keep automatic replay closed until a later branch park succeeds.
+    @ObservationIgnored
+    var isOutboxReplaySuppressedAfterBranchParkingFailure = false
     @ObservationIgnored
     var cancelingOutboxCommandIDs: Set<String> = []
     @ObservationIgnored

@@ -111,6 +111,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     public static let outboxUnconfirmedError = "delivery_unconfirmed"
     public static let outboxUnknownTargetError = "delivery_target_unknown"
     public static let outboxChangedTargetError = "delivery_target_changed"
+    private static let outboxBranchParkingMarker = "\n# branch-park:"
     // v2 adds the durable outbox; v3 adds delivery ownership; v4 binds
     // replay to the main-routing contract; v5 persists that verified identity;
     // v6 keeps bounded attachment bytes inside the same durable command owner.
@@ -690,23 +691,72 @@ extension OpenClawChatSQLiteTranscriptCache {
             return nil
         }
         let normalizedAgentID = Self.normalizedAgentID(agentID)
+        let versionedLastError = lastError + Self.outboxBranchParkingMarker + UUID().uuidString
+        guard self.execute(db, sql: "BEGIN IMMEDIATE", bindings: []) else { return nil }
+        var committed = false
+        defer {
+            if !committed {
+                _ = self.execute(db, sql: "ROLLBACK", bindings: [])
+            }
+        }
         guard self.execute(
             db,
             sql: """
-            UPDATE outbox_commands SET status = 'failed', last_error = ?4
+            UPDATE outbox_commands
+            SET status = 'failed', last_error = ?4
             WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
-              AND status IN ('queued', 'sending', 'awaiting_confirmation')
+              AND status IN ('queued', 'sending', 'awaiting_confirmation', 'failed')
             """,
-            bindings: [self.gatewayID, sessionKey, normalizedAgentID, lastError])
+            bindings: [self.gatewayID, sessionKey, normalizedAgentID, versionedLastError])
         else {
             self.hasRecoveredInterruptedSends = false
             return nil
         }
-        return self.readCommands(db)
+        guard let commands = self.readCommands(db) else { return nil }
+        committed = self.execute(db, sql: "COMMIT", bindings: [])
+        return committed ? commands : nil
+    }
+
+    static func outboxDisplayError(_ lastError: String?) -> String? {
+        guard let lastError,
+              let marker = lastError.range(of: outboxBranchParkingMarker)
+        else { return lastError }
+        return String(lastError[..<marker.lowerBound])
     }
 
     public func markCommandRetriedIfPresent(
         id: String,
+        agentID: String?,
+        deliverySessionKey: String,
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+    {
+        await self.markCommandRetriedIfPresent(
+            id: id,
+            expectedFailure: nil,
+            agentID: agentID,
+            deliverySessionKey: deliverySessionKey,
+            routingContract: routingContract)
+    }
+
+    public func markCommandRetriedIfPresent(
+        id: String,
+        expectedRetryCount: Int,
+        expectedLastError: String?,
+        agentID: String?,
+        deliverySessionKey: String,
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+    {
+        await self.markCommandRetriedIfPresent(
+            id: id,
+            expectedFailure: (expectedRetryCount, expectedLastError),
+            agentID: agentID,
+            deliverySessionKey: deliverySessionKey,
+            routingContract: routingContract)
+    }
+
+    private func markCommandRetriedIfPresent(
+        id: String,
+        expectedFailure: (retryCount: Int, lastError: String?)?,
         agentID: String?,
         deliverySessionKey: String,
         routingContract: String) async -> OpenClawChatOutboxUpdateResult
@@ -741,25 +791,42 @@ extension OpenClawChatSQLiteTranscriptCache {
         case .unavailable:
             return .unavailable
         }
-        guard self.execute(
-            db,
-            sql: """
+        let retrySQL: String
+        var retryBindings: [Any] = [
+            self.gatewayID,
+            id,
+            Date().timeIntervalSince1970,
+            normalizedAgentID,
+            normalizedDeliverySessionKey,
+            normalizedRoutingContract,
+        ]
+        if let expectedFailure {
+            retrySQL = """
             UPDATE outbox_commands
             SET status = 'queued', retry_count = 0, last_error = '', created_at = ?3,
                 agent_id = ?4, delivery_session_key = ?5, routing_contract = ?6
             WHERE gateway_id = ?1 AND client_uuid = ?2 AND status = 'failed'
-            """,
-            bindings: [
-                self.gatewayID,
-                id,
-                Date().timeIntervalSince1970,
-                normalizedAgentID,
-                normalizedDeliverySessionKey,
-                normalizedRoutingContract,
-            ])
+              AND retry_count = ?7 AND last_error = ?8
+            """
+            retryBindings.append(expectedFailure.retryCount)
+            retryBindings.append(expectedFailure.lastError ?? "")
+        } else {
+            retrySQL = """
+            UPDATE outbox_commands
+            SET status = 'queued', retry_count = 0, last_error = '', created_at = ?3,
+                agent_id = ?4, delivery_session_key = ?5, routing_contract = ?6
+            WHERE gateway_id = ?1 AND client_uuid = ?2 AND status = 'failed'
+            """
+        }
+        guard self.execute(db, sql: retrySQL, bindings: retryBindings)
         else { return .unavailable }
         guard sqlite3_changes(db) > 0 else {
             committed = self.execute(db, sql: "COMMIT", bindings: [])
+            if expectedFailure != nil, committed {
+                // A branch park changed the failure version after the tap.
+                // Keep the row failed instead of letting the stale retry win.
+                return .unavailable
+            }
             return committed ? .missing : .unavailable
         }
         // Retargeting adopts a new cache owner. Remove the optimistic row

@@ -222,7 +222,8 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         id: String,
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
-    /// Parks every replayable row for one presentation session and agent owner.
+    /// Parks every unresolved row for one presentation session and agent owner,
+    /// versioning existing failures so a concurrently captured retry loses.
     /// The default fails closed; supported stores override atomically.
     /// Returns the updated gateway snapshot, or nil when unsupported or unavailable.
     func failPendingCommands(
@@ -233,6 +234,15 @@ public protocol OpenClawChatCommandOutbox: Sendable {
     /// canonical target explicitly selected by the user.
     func markCommandRetriedIfPresent(
         id: String,
+        agentID: String?,
+        deliverySessionKey: String,
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+    /// Retry only if the failed row still matches the version shown to the user.
+    /// The default fails closed so a store cannot bypass branch-change parking.
+    func markCommandRetriedIfPresent(
+        id: String,
+        expectedRetryCount: Int,
+        expectedLastError: String?,
         agentID: String?,
         deliverySessionKey: String,
         routingContract: String) async -> OpenClawChatOutboxUpdateResult
@@ -253,6 +263,17 @@ extension OpenClawChatCommandOutbox {
         lastError _: String) async -> [OpenClawChatOutboxCommand]?
     {
         nil
+    }
+
+    public func markCommandRetriedIfPresent(
+        id _: String,
+        expectedRetryCount _: Int,
+        expectedLastError _: String?,
+        agentID _: String?,
+        deliverySessionKey _: String,
+        routingContract _: String) async -> OpenClawChatOutboxUpdateResult
+    {
+        .unavailable
     }
 }
 

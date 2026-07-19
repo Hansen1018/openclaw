@@ -1361,6 +1361,48 @@ struct ChatCommandOutboxStoreTests {
         #expect(await storeB.loadCommands().map(\.status) == [.queued])
     }
 
+    @Test func `branch parking wins over a retry captured from the previous failure`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let parkingStore = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let retryStore = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        #expect(await parkingStore.enqueueCommand(outboxCommand(
+            id: "c-race",
+            sessionKey: "main",
+            agentID: "agent-a",
+            text: "do not cross branches")))
+        #expect(await parkingStore.claimNextCommand()?.id == "c-race")
+        #expect(await parkingStore.markCommandFailedIfPresent(
+            id: "c-race",
+            retryCount: 2,
+            lastError: "previous failure") == .updated)
+        let failureBeforeParking = try #require(await parkingStore.loadCommands().first)
+
+        _ = try #require(await parkingStore.failPendingCommands(
+            sessionKey: "main",
+            agentID: "agent-a",
+            lastError: "branch changed"))
+        #expect(await retryStore.markCommandRetriedIfPresent(
+            id: "c-race",
+            expectedRetryCount: failureBeforeParking.retryCount,
+            expectedLastError: failureBeforeParking.lastError,
+            agentID: "agent-a",
+            deliverySessionKey: "main",
+            routingContract: "per-sender|main|agent-a") == .unavailable)
+
+        let parked = try #require(await parkingStore.loadCommands().first)
+        #expect(parked.status == .failed)
+        #expect(parked.retryCount == failureBeforeParking.retryCount)
+        #expect(OpenClawChatSQLiteTranscriptCache.outboxDisplayError(parked.lastError) == "branch changed")
+        #expect(await retryStore.markCommandRetriedIfPresent(
+            id: "c-race",
+            expectedRetryCount: parked.retryCount,
+            expectedLastError: parked.lastError,
+            agentID: "agent-a",
+            deliverySessionKey: "main",
+            routingContract: "per-sender|main|agent-a") == .updated)
+    }
+
     @Test func `retry and failure marks persist retry count and last error`() async throws {
         let url = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

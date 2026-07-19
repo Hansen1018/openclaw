@@ -526,6 +526,19 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.branchListSessionKeys() == ["main"])
     }
 
+    @Test func `opening branch menu refreshes conversation stale metadata once`() async {
+        let staleBranches = self.branches()
+        let freshBranches = self.branches(activeLeafEntryID: "leaf-new")
+        let transport = SessionActionTransport(branches: freshBranches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = staleBranches
+
+        await viewModel.refreshSessionBranchesForMenuPresentation()
+
+        #expect(viewModel.sessionBranches == freshBranches)
+        #expect(await transport.branchListSessionKeys() == ["main"])
+    }
+
     @Test func `branch message count uses localized singular and plural forms`() {
         #expect(OpenClawChatComposer.branchMessageCount(1) == "1 message")
         #expect(OpenClawChatComposer.branchMessageCount(2) == "2 messages")

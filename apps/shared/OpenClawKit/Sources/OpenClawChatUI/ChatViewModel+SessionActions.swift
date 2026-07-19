@@ -425,6 +425,10 @@ extension OpenClawChatViewModel {
         }
     }
 
+    func refreshSessionBranchesForMenuPresentation() async {
+        await self.refreshSessionBranches()
+    }
+
     var canSwitchSessionBranch: Bool {
         !self.hasBlockingRunActivity &&
             !self.isSending &&

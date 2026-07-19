@@ -625,6 +625,23 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
             routingContract: routingContract)
     }
 
+    func markCommandRetriedIfPresent(
+        id: String,
+        expectedRetryCount: Int,
+        expectedLastError: String?,
+        agentID: String?,
+        deliverySessionKey: String,
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+    {
+        await self.base.markCommandRetriedIfPresent(
+            id: id,
+            expectedRetryCount: expectedRetryCount,
+            expectedLastError: expectedLastError,
+            agentID: agentID,
+            deliverySessionKey: deliverySessionKey,
+            routingContract: routingContract)
+    }
+
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         await self.base.cancelCommand(id: id)
     }
@@ -726,6 +743,23 @@ private actor SnapshotHoldingOutbox: OpenClawChatCommandOutbox {
             routingContract: routingContract)
     }
 
+    func markCommandRetriedIfPresent(
+        id: String,
+        expectedRetryCount: Int,
+        expectedLastError: String?,
+        agentID: String?,
+        deliverySessionKey: String,
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+    {
+        await self.base.markCommandRetriedIfPresent(
+            id: id,
+            expectedRetryCount: expectedRetryCount,
+            expectedLastError: expectedLastError,
+            agentID: agentID,
+            deliverySessionKey: deliverySessionKey,
+            routingContract: routingContract)
+    }
+
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         await self.base.cancelCommand(id: id)
     }
@@ -803,6 +837,23 @@ private actor CancellationHoldingOutbox: OpenClawChatCommandOutbox {
     {
         await self.base.markCommandRetriedIfPresent(
             id: id,
+            agentID: agentID,
+            deliverySessionKey: deliverySessionKey,
+            routingContract: routingContract)
+    }
+
+    func markCommandRetriedIfPresent(
+        id: String,
+        expectedRetryCount: Int,
+        expectedLastError: String?,
+        agentID: String?,
+        deliverySessionKey: String,
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+    {
+        await self.base.markCommandRetriedIfPresent(
+            id: id,
+            expectedRetryCount: expectedRetryCount,
+            expectedLastError: expectedLastError,
             agentID: agentID,
             deliverySessionKey: deliverySessionKey,
             routingContract: routingContract)
@@ -942,7 +993,39 @@ struct ChatViewModelOutboxTests {
         #expect(await store.loadCommands().map(\.status) == [.queued])
     }
 
-    @Test func `remote branch switch parks pending outbox command without replay`() async throws {
+    @Test func `remote branch parking failure keeps recovery reload from replaying`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let unsupportedOutbox = DelayingOutbox(base: store)
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: unsupportedOutbox)
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("outbox restore completes") {
+            await MainActor.run { vm.hasRestoredOutboxMessages }
+        }
+        try await sendWhileOffline(vm, text: "stay parked after reload")
+        await transport.state.setHealthy(true)
+        await MainActor.run {
+            vm.handleTransportEvent(.sessionsChanged(.init(
+                sessionKey: "main",
+                reason: "branch-switch")))
+        }
+
+        try await waitUntil("branch recovery reload completes") {
+            await MainActor.run {
+                !vm.isLoading && vm.healthOK && vm.hasCurrentSessionMetadata
+            }
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(await MainActor.run { vm.isOutboxReplaySuppressedAfterBranchParkingFailure })
+        #expect(await store.loadCommands().map(\.status) == [.queued])
+        #expect(await transport.state.sentMessages.isEmpty)
+    }
+
+    @Test func `remote branch switch recovery keeps parked command from replaying`() async throws {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
@@ -955,6 +1038,7 @@ struct ChatViewModelOutboxTests {
         }
         try await sendWhileOffline(vm, text: "do not replay")
         await transport.state.setHealthy(true)
+        await transport.state.setHistoryFails(true)
         await MainActor.run {
             vm.handleTransportEvent(.sessionsChanged(.init(
                 sessionKey: "main",
@@ -970,9 +1054,13 @@ struct ChatViewModelOutboxTests {
             }
         }
         try await waitUntil("remote branch reconciliation completes") {
-            await MainActor.run { !vm.isSwitchingSessionBranch }
+            let historyRequestCount = await transport.state.historyRequestCount
+            return await MainActor.run {
+                historyRequestCount >= 3 && !vm.isSwitchingSessionBranch && !vm.isLoading
+            }
         }
         #expect(await MainActor.run { !vm.canSwitchSessionBranch })
+        await transport.state.setHistoryFails(false)
         await transport.goOnline()
         try await waitUntil("post-switch outbox flush settles") {
             await MainActor.run {

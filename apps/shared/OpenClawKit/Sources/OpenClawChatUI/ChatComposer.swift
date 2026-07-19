@@ -607,6 +607,9 @@ struct OpenClawChatComposer: View {
                 }
                 .disabled(branch.active)
             }
+            .task {
+                await self.viewModel.refreshSessionBranchesForMenuPresentation()
+            }
         } label: {
             Image(systemName: "arrow.triangle.branch")
         }
