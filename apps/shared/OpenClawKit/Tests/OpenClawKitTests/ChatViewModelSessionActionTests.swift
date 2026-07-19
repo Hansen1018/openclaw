@@ -526,6 +526,11 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.branchListSessionKeys() == ["main"])
     }
 
+    @Test func `branch message count uses localized singular and plural forms`() {
+        #expect(OpenClawChatComposer.branchMessageCount(1) == "1 message")
+        #expect(OpenClawChatComposer.branchMessageCount(2) == "2 messages")
+    }
+
     @Test func `branch refresh failure preserves cached branches`() async {
         let branches = self.branches()
         let transport = SessionActionTransport(branchListFailureIndices: [0])

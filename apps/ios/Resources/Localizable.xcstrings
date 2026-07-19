@@ -2313,142 +2313,6 @@
         }
       }
     },
-    "%@ messages": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ messages"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%@ messages"
-          }
-        }
-      }
-    },
     "%@ min": {
       "localizations": {
         "en": {
@@ -197061,6 +196925,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "^[%lld post](inflect: true)"
+          }
+        }
+      }
+    },
+    "^[%lld message](inflect: true)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "^[%lld message](inflect: true)"
           }
         }
       }

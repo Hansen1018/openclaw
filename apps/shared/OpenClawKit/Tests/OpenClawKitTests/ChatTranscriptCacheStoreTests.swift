@@ -61,6 +61,7 @@ private func messageTexts(_ messages: [OpenClawChatMessage]) -> [String] {
 private func outboxCommand(
     id: String = UUID().uuidString,
     sessionKey: String = "main",
+    agentID: String? = nil,
     text: String,
     attachments: [OpenClawChatOutboxAttachment] = [],
     thinking: String = "off",
@@ -69,6 +70,7 @@ private func outboxCommand(
     OpenClawChatOutboxCommand(
         id: id,
         sessionKey: sessionKey,
+        agentID: agentID,
         text: text,
         attachments: attachments,
         thinking: thinking,
@@ -1313,6 +1315,50 @@ struct ChatCommandOutboxStoreTests {
         let survivors = await storeA.loadCommands()
         #expect(survivors.map(\.id) == ["c-a"])
         #expect(survivors.map(\.status) == [.queued])
+    }
+
+    @Test func `branch parking is scoped by gateway session and agent`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let storeA = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let storeB = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-b")
+        let now = Date().timeIntervalSince1970
+        #expect(await storeA.enqueueCommand(outboxCommand(
+            id: "a-current",
+            sessionKey: "main",
+            agentID: "agent-a",
+            text: "park me",
+            createdAt: now)))
+        #expect(await storeA.enqueueCommand(outboxCommand(
+            id: "a-other-agent",
+            sessionKey: "main",
+            agentID: "agent-b",
+            text: "leave me",
+            createdAt: now + 1)))
+        #expect(await storeA.enqueueCommand(outboxCommand(
+            id: "a-other-session",
+            sessionKey: "other",
+            agentID: "agent-a",
+            text: "leave me too",
+            createdAt: now + 2)))
+        #expect(await storeB.enqueueCommand(outboxCommand(
+            id: "b-current",
+            sessionKey: "main",
+            agentID: "agent-a",
+            text: "other gateway",
+            createdAt: now + 3)))
+
+        let parked = try #require(await storeA.failPendingCommands(
+            sessionKey: "main",
+            agentID: " Agent-A ",
+            lastError: "branch changed"))
+        let statuses = Dictionary(uniqueKeysWithValues: parked.map { ($0.id, $0.status) })
+        #expect(statuses == [
+            "a-current": .failed,
+            "a-other-agent": .queued,
+            "a-other-session": .queued,
+        ])
+        #expect(await storeB.loadCommands().map(\.status) == [.queued])
     }
 
     @Test func `retry and failure marks persist retry count and last error`() async throws {

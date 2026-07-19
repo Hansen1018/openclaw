@@ -623,15 +623,17 @@ struct OpenClawChatComposer: View {
     }
 
     private func branchMetadata(_ branch: OpenClawChatSessionBranch) -> String {
-        var parts = [String(
-            format: String(localized: "%@ messages"),
-            branch.messageCount.formatted())]
+        var parts = [Self.branchMessageCount(branch.messageCount)]
         if let updatedAt = branch.updatedAt,
            let date = try? Date(updatedAt, strategy: .iso8601)
         {
             parts.append(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
         }
         return parts.joined(separator: " · ")
+    }
+
+    static func branchMessageCount(_ count: Int) -> String {
+        String(AttributedString(localized: "^[\(count) message](inflect: true)").characters)
     }
 
     private var messageSessionActionsDisabled: Bool {

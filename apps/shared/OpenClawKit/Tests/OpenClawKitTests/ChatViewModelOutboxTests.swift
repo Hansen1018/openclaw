@@ -915,6 +915,33 @@ struct ChatViewModelOutboxTests {
         #expect(await transport.state.switchedBranchLeafEntryIDs == ["leaf-new"])
     }
 
+    @Test func `unsupported parking default fails closed and blocks branch switch`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let unsupportedOutbox = DelayingOutbox(base: store)
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: unsupportedOutbox)
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("outbox restore completes") {
+            await MainActor.run { vm.hasRestoredOutboxMessages }
+        }
+        try await sendWhileOffline(vm, text: "keep on this branch")
+        #expect(await unsupportedOutbox.failPendingCommands(
+            sessionKey: "main",
+            agentID: "main",
+            lastError: "branch changed") == nil)
+        await MainActor.run {
+            vm.sessionBranches = outboxTestBranches(activeLeafEntryID: "leaf-active")
+        }
+
+        await vm.switchToBranch("leaf-new")
+
+        #expect(await transport.state.switchedBranchLeafEntryIDs.isEmpty)
+        #expect(await store.loadCommands().map(\.status) == [.queued])
+    }
+
     @Test func `remote branch switch parks pending outbox command without replay`() async throws {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

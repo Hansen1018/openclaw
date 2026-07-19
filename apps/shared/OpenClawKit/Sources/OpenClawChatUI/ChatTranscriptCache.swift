@@ -682,20 +682,22 @@ extension OpenClawChatSQLiteTranscriptCache {
 
     public func failPendingCommands(
         sessionKey: String,
+        agentID: String?,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
     {
         guard !self.isRetired, let db = await handle() else {
             self.hasRecoveredInterruptedSends = false
             return nil
         }
+        let normalizedAgentID = Self.normalizedAgentID(agentID)
         guard self.execute(
             db,
             sql: """
-            UPDATE outbox_commands SET status = 'failed', last_error = ?3
-            WHERE gateway_id = ?1 AND session_key = ?2
+            UPDATE outbox_commands SET status = 'failed', last_error = ?4
+            WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
               AND status IN ('queued', 'sending', 'awaiting_confirmation')
             """,
-            bindings: [self.gatewayID, sessionKey, lastError])
+            bindings: [self.gatewayID, sessionKey, normalizedAgentID, lastError])
         else {
             self.hasRecoveredInterruptedSends = false
             return nil

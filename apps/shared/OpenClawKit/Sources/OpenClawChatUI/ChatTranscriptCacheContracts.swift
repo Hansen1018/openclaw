@@ -222,11 +222,12 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         id: String,
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
-    /// Parks every replayable row for one presentation session.
-    /// Store owners should override atomically; the default preserves source compatibility.
-    /// Returns the updated gateway snapshot, or nil when storage is unavailable.
+    /// Parks every replayable row for one presentation session and agent owner.
+    /// The default fails closed; supported stores override atomically.
+    /// Returns the updated gateway snapshot, or nil when unsupported or unavailable.
     func failPendingCommands(
         sessionKey: String,
+        agentID: String?,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
     /// Result-bearing retry used to adopt an unowned legacy alias into the
     /// canonical target explicitly selected by the user.
@@ -247,18 +248,11 @@ public protocol OpenClawChatCommandOutbox: Sendable {
 
 extension OpenClawChatCommandOutbox {
     public func failPendingCommands(
-        sessionKey: String,
-        lastError: String) async -> [OpenClawChatOutboxCommand]?
+        sessionKey _: String,
+        agentID _: String?,
+        lastError _: String) async -> [OpenClawChatOutboxCommand]?
     {
-        guard let commands = await self.loadCommandsIfAvailable() else { return nil }
-        for command in commands where command.sessionKey == sessionKey && command.status != .failed {
-            guard await self.markCommandFailedIfPresent(
-                id: command.id,
-                retryCount: command.retryCount,
-                lastError: lastError) != .unavailable
-            else { return nil }
-        }
-        return await self.loadCommandsIfAvailable()
+        nil
     }
 }
 

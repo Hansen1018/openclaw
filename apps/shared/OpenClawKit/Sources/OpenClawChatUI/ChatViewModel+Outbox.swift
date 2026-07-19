@@ -54,11 +54,14 @@ extension OpenClawChatViewModel {
 
     func failPendingOutboxCommandsForBranchChange(_ session: SessionSnapshot) async -> Bool {
         guard let outbox else { return true }
+        let agentID = self.outboxAgentID(for: session)
+        guard !self.outboxRequiresAgentID(for: session) || agentID != nil else { return false }
         self.outboxPresentationGeneration &+= 1
         self.outboxRetryTask?.cancel()
         let reason = "Session branch changed; review and retry this message."
         guard let commands = await outbox.failPendingCommands(
             sessionKey: session.key,
+            agentID: agentID,
             lastError: reason)
         else {
             self.applyTransportHealth(false)
