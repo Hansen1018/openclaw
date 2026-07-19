@@ -107,29 +107,29 @@ export function prepareSignalManagedNativeTransport(params: {
     httpHost:
       params.overrides?.httpHost ?? existingManaged?.httpHost ?? DEFAULT_SIGNAL_MANAGED_NATIVE_HOST,
   };
-  const reservedPorts = new Set<number>();
-  let implicitManagedAccountCount = 0;
-  // Reserve existing accounts before adding the target. Persisting only the target's allocated
-  // port keeps newcomers after established implicit ports, even if account ids reorder.
+  const portsByAccountId = new Map<string, Set<number>>();
+  const implicitManagedAccountIds: string[] = [];
+  // Resolve the full current allocation before excluding the selected owner. Otherwise an
+  // implicit sibling can claim the target's port and make an unrelated edit swap both daemons.
   for (const accountId of listSignalAccountIds(params.cfg)) {
-    if (normalizeAccountId(accountId) === normalizeAccountId(params.accountId)) {
-      continue;
-    }
+    const normalizedAccountId = normalizeAccountId(accountId);
     const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
     if (!normalizeOptionalString(accountConfig.account) && !accountConfig.transport) {
       continue;
     }
+    const accountPorts = portsByAccountId.get(normalizedAccountId) ?? new Set<number>();
+    portsByAccountId.set(normalizedAccountId, accountPorts);
     const transport = accountConfig.transport;
     if (transport?.kind === "managed-native") {
       if (transport.httpPort !== undefined) {
-        reservedPorts.add(transport.httpPort);
+        accountPorts.add(transport.httpPort);
       } else {
-        implicitManagedAccountCount += 1;
+        implicitManagedAccountIds.push(normalizedAccountId);
       }
       if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
         const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
         if (localConnectionPort !== undefined) {
-          reservedPorts.add(localConnectionPort);
+          accountPorts.add(localConnectionPort);
         }
       }
       continue;
@@ -137,15 +137,36 @@ export function prepareSignalManagedNativeTransport(params: {
     if (transport?.kind === "external-native" || transport?.kind === "container") {
       const localPort = resolveLocalSignalTransportPort(transport.url);
       if (localPort !== undefined) {
-        reservedPorts.add(localPort);
+        accountPorts.add(localPort);
       }
       continue;
     }
-    implicitManagedAccountCount += 1;
+    implicitManagedAccountIds.push(normalizedAccountId);
   }
-  for (let remaining = implicitManagedAccountCount; remaining > 0; remaining -= 1) {
-    const httpPort = allocateSignalManagedNativePort({ reservedPorts });
-    reservedPorts.add(httpPort);
+  const currentReservedPorts = new Set<number>();
+  for (const accountPorts of portsByAccountId.values()) {
+    for (const httpPort of accountPorts) {
+      currentReservedPorts.add(httpPort);
+    }
+  }
+  for (const accountId of implicitManagedAccountIds) {
+    const accountPorts = portsByAccountId.get(accountId);
+    if (!accountPorts) {
+      continue;
+    }
+    const httpPort = allocateSignalManagedNativePort({ reservedPorts: currentReservedPorts });
+    currentReservedPorts.add(httpPort);
+    accountPorts.add(httpPort);
+  }
+  const targetAccountId = normalizeAccountId(params.accountId);
+  const reservedPorts = new Set<number>();
+  for (const [accountId, accountPorts] of portsByAccountId) {
+    if (accountId === targetAccountId) {
+      continue;
+    }
+    for (const httpPort of accountPorts) {
+      reservedPorts.add(httpPort);
+    }
   }
 
   const hasIndependentPreparedConnectionUrl =

@@ -112,6 +112,38 @@ describe("prepareSignalManagedNativeTransport", () => {
     });
   });
 
+  it("keeps sibling implicit allocation stable while updating an existing target", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            a: {
+              account: "+15555550123",
+              transport: { kind: "managed-native", httpPort: 8080 },
+            },
+            b: { account: "+15555550124", transport: { kind: "managed-native" } },
+          },
+        },
+      },
+    } as const;
+
+    const transport = prepareSignalManagedNativeTransport({
+      cfg: cfg as never,
+      accountId: "a",
+      overrides: { cliPath: "/opt/signal-cli" },
+    });
+    const next = writeSignalAccountTransport({
+      cfg: cfg as never,
+      accountId: "a",
+      transport,
+    });
+
+    expect(transport.httpPort).toBe(8080);
+    expect(resolveSignalAccount({ cfg: next, accountId: "b" }).transport).toMatchObject({
+      httpPort: 8081,
+    });
+  });
+
   it("preserves managed options behind a case-preserving account key", () => {
     const cfg = {
       channels: {
