@@ -289,6 +289,7 @@ import {
   GatewayErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  UnknownAgentIdErrorDetailsSchema,
 } from "./error-codes.js";
 import {
   ExecApprovalsGetParamsSchema,
@@ -642,6 +643,7 @@ export const ProtocolSchemas = {
   ErrorShape: ErrorShapeSchema,
   MissingScopeErrorDetails: MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetails: McpAppViewExpiredErrorDetailsSchema,
+  UnknownAgentIdErrorDetails: UnknownAgentIdErrorDetailsSchema,
   GatewayErrorDetails: GatewayErrorDetailsSchema,
   GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
