@@ -34,6 +34,7 @@ import {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
+import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
@@ -469,6 +470,10 @@ async function initSessionStateAttemptLocked(
   let persistedSpawnedCwd: SessionEntry["spawnedCwd"];
   let persistedParentSessionKey: SessionEntry["parentSessionKey"];
   let persistedForkedFromParent: SessionEntry["forkedFromParent"];
+  let persistedForkSource: SessionEntry["forkSource"];
+  let persistedCreatedVia: SessionEntry["createdVia"];
+  let persistedCreatedActor: SessionEntry["createdActor"];
+  let persistedCreatedAt: SessionEntry["createdAt"];
   let persistedSpawnDepth: SessionEntry["spawnDepth"];
   let persistedSubagentRole: SessionEntry["subagentRole"];
   let persistedSubagentControlScope: SessionEntry["subagentControlScope"];
@@ -800,6 +805,10 @@ async function initSessionStateAttemptLocked(
       persistedSpawnedCwd = entry.spawnedCwd;
       persistedParentSessionKey = entry.parentSessionKey;
       persistedForkedFromParent = entry.forkedFromParent;
+      persistedForkSource = entry.forkSource;
+      persistedCreatedVia = entry.createdVia;
+      persistedCreatedActor = entry.createdActor;
+      persistedCreatedAt = entry.createdAt;
       persistedSpawnDepth = entry.spawnDepth;
       persistedSubagentRole = entry.subagentRole;
       persistedSubagentControlScope = entry.subagentControlScope;
@@ -908,6 +917,7 @@ async function initSessionStateAttemptLocked(
     pinnedAt: entry?.pinnedAt,
     usageFamilyKey,
     usageFamilySessionIds,
+    previousSessionId: previousSessionEntry?.sessionId ?? baseEntry?.previousSessionId,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
@@ -925,6 +935,10 @@ async function initSessionStateAttemptLocked(
     spawnedCwd: persistedSpawnedCwd ?? baseEntry?.spawnedCwd,
     parentSessionKey: persistedParentSessionKey ?? baseEntry?.parentSessionKey,
     forkedFromParent: persistedForkedFromParent ?? baseEntry?.forkedFromParent,
+    forkSource: persistedForkSource ?? baseEntry?.forkSource,
+    createdVia: persistedCreatedVia ?? baseEntry?.createdVia,
+    createdActor: persistedCreatedActor ?? baseEntry?.createdActor,
+    createdAt: persistedCreatedAt ?? baseEntry?.createdAt,
     spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,
     subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
     subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,
@@ -977,7 +991,7 @@ async function initSessionStateAttemptLocked(
     sessionEntry.displayName = threadLabel;
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
-  const alreadyForked = sessionEntry.forkedFromParent === true;
+  const alreadyForked = sessionEntryForkedFromParent(sessionEntry);
   if (params.signal?.aborted === true) {
     throw new Error("reply session initialization aborted");
   }

@@ -14,6 +14,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -429,6 +430,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           branch: sessionWorktree.branch,
         }
       : undefined;
+    const responseEntry = sessionEntryForkedFromParent(created.entry)
+      ? { ...created.entry, forkedFromParent: true as const }
+      : created.entry;
     if (created.resetExisting) {
       respond(
         true,
@@ -436,7 +440,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           ok: true,
           key: created.key,
           sessionId: created.entry.sessionId,
-          entry: created.entry,
+          entry: responseEntry,
           resolved: created.resolved,
           runStarted: false,
           ...(createdWorktree ? { worktree: createdWorktree } : {}),
@@ -464,7 +468,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         ok: true,
         key: created.key,
         sessionId: created.entry.sessionId,
-        entry: created.entry,
+        entry: responseEntry,
         runStarted,
         ...(runPayload ? runPayload : {}),
         ...(runStarted && typeof messageSeq === "number" ? { messageSeq } : {}),
