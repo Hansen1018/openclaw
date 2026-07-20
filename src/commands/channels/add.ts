@@ -262,15 +262,18 @@ async function channelsAddCommandImpl(
       channel && !recoveringInvalidConfig ? getLoadedChannelPlugin(channel) : undefined;
     const bundledSetupPlugin =
       channel && !recoveringInvalidConfig ? getBundledChannelSetupPlugin(channel) : undefined;
-    if (
-      !registeredPlugin &&
-      !bundledSetupPlugin &&
-      !isCatalogChannelInstalled({
-        cfg: nextConfig,
-        entry: catalogEntry,
-        workspaceDir,
-      })
-    ) {
+    // Core may have advanced before an external channel owner. Refresh the approved catalog
+    // package before recovery so stale setup code cannot write the retired config shape again.
+    const catalogOwnerNeedsInstall =
+      recoveringInvalidConfig ||
+      (!registeredPlugin &&
+        !bundledSetupPlugin &&
+        !isCatalogChannelInstalled({
+          cfg: nextConfig,
+          entry: catalogEntry,
+          workspaceDir,
+        }));
+    if (catalogOwnerNeedsInstall) {
       const { ensureChannelSetupPluginInstalled } = await loadChannelSetupPluginInstall();
       const prompter = createClackPrompter();
       const result = await ensureChannelSetupPluginInstalled({

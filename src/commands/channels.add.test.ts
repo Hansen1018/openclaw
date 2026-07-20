@@ -507,6 +507,8 @@ describe("channelsAddCommand", () => {
     };
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
     catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(catalogEntry);
+    // Recovery must refresh an already-installed owner in case core advanced first.
+    discoveryMocks.isCatalogChannelInstalled.mockReturnValue(true);
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]),
     );
@@ -528,6 +530,9 @@ describe("channelsAddCommand", () => {
       excludeWorkspace: true,
       excludeOrigins: ["config", "workspace", "global"],
     });
+    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: catalogEntry, promptInstall: false }),
+    );
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
     expect(writtenChannel("signal")).toMatchObject({
