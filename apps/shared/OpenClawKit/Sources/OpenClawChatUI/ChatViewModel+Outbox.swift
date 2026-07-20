@@ -80,6 +80,18 @@ extension OpenClawChatViewModel {
         self.outbox != nil && (!self.hasRestoredOutboxMessages || !self.outboxStatesByMessageID.isEmpty)
     }
 
+    func beginOutboxBranchSwitch(_ session: SessionSnapshot) async -> Bool {
+        guard let outbox else { return true }
+        guard let scope = self.outboxBranchScope(for: session) else { return false }
+        await self.pendingCacheWriteTask?.value
+        return await outbox.beginBranchSwitch(scope)
+    }
+
+    func cancelOutboxBranchSwitch(_ session: SessionSnapshot) async {
+        guard let outbox, let scope = self.outboxBranchScope(for: session) else { return }
+        _ = await outbox.cancelBranchSwitch(scope)
+    }
+
     func confirmOutboxBranchChange(_ session: SessionSnapshot, activeLeafEntryID: String) async -> Bool {
         guard let outbox else { return true }
         guard let scope = self.outboxBranchScope(for: session) else { return false }
@@ -233,19 +245,52 @@ extension OpenClawChatViewModel {
                        connectionGeneration == self.outboxBranchConnectionGeneration
                     {
                         self.reconciledOutboxBranchScopes.insert(scope)
+                        self.clearOutboxBranchReconcileRetry(for: scope)
                     }
                 } catch {
                     if Self.branchListingIsUnsupported(error) {
                         if connectionGeneration == self.outboxBranchConnectionGeneration {
                             self.reconciledOutboxBranchScopes.insert(scope)
+                            self.clearOutboxBranchReconcileRetry(for: scope)
                         }
                     } else {
                         outboxLogger.debug(
                             "outbox branch reconcile paused \(error.localizedDescription, privacy: .public)")
+                        self.scheduleOutboxBranchReconcileRetry(
+                            for: scope,
+                            connectionGeneration: connectionGeneration)
                     }
                 }
             }
             self.flushOutboxIfNeeded()
+        }
+    }
+
+    private func clearOutboxBranchReconcileRetry(for scope: OpenClawChatOutboxScope) {
+        self.outboxBranchReconcileRetryTasks.removeValue(forKey: scope)?.cancel()
+        self.outboxBranchReconcileRetryAttempts.removeValue(forKey: scope)
+    }
+
+    private func scheduleOutboxBranchReconcileRetry(
+        for scope: OpenClawChatOutboxScope,
+        connectionGeneration: UInt64)
+    {
+        guard self.healthOK,
+              self.outboxBranchReconcileRetryTasks[scope] == nil
+        else { return }
+        let attempt = self.outboxBranchReconcileRetryAttempts[scope, default: 0]
+        guard attempt < self.outboxBranchReconcileRetryDelaysMs.count else { return }
+        self.outboxBranchReconcileRetryAttempts[scope] = attempt + 1
+        let delayMs = self.outboxBranchReconcileRetryDelaysMs[attempt]
+        self.outboxBranchReconcileRetryTasks[scope] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.outboxBranchReconcileRetryTasks.removeValue(forKey: scope)
+            guard self.healthOK,
+                  connectionGeneration == self.outboxBranchConnectionGeneration,
+                  !self.reconciledOutboxBranchScopes.contains(scope)
+            else { return }
+            self.reconcilePendingOutboxBranchScopes()
         }
     }
 
@@ -273,6 +318,7 @@ extension OpenClawChatViewModel {
                 return
             }
             guard self.isCurrentSession(session) else { return }
+            let replacementID = UUID().uuidString
             let result = await outbox.markCommandRetriedIfPresent(
                 id: commandID,
                 expectedAttemptVersion: failureVersion.attemptVersion,
@@ -280,8 +326,24 @@ extension OpenClawChatViewModel {
                 expectedLastError: failureVersion.lastError,
                 agentID: agentID,
                 deliverySessionKey: deliverySessionKey,
-                routingContract: routingContract)
+                routingContract: routingContract,
+                replacementID: replacementID)
             if result == .updated {
+                let commands = await outbox.loadCommands()
+                guard let current = commands.first(where: { $0.id == commandID || $0.id == replacementID }) else {
+                    self.reconcilePendingOutboxBranchScopes()
+                    self.flushOutboxIfNeeded()
+                    return
+                }
+                if current.id != commandID,
+                   let previousMessageID = self.outboxMessageIDsByCommandID.removeValue(forKey: commandID)
+                {
+                    self.outboxCommandIDsByMessageID.removeValue(forKey: previousMessageID)
+                    self.outboxStatesByMessageID.removeValue(forKey: previousMessageID)
+                    self.outboxFailureVersionsByMessageID.removeValue(forKey: previousMessageID)
+                    self.replaceMessages(self.messages.filter { $0.id != previousMessageID })
+                }
+                self.presentOutboxCommands([current])
                 // Durable work is gateway-global. Flush even when the visible
                 // session changed while the SQLite update was suspended.
                 self.reconcilePendingOutboxBranchScopes()
@@ -290,8 +352,10 @@ extension OpenClawChatViewModel {
             guard self.isCurrentSession(session) else { return }
             switch result {
             case .updated:
-                self.outboxStatesByMessageID[messageID] = .queued
-                self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
+                if self.outboxCommandIDsByMessageID[messageID] == commandID {
+                    self.outboxStatesByMessageID[messageID] = .queued
+                    self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
+                }
             case .missing, .confirmed:
                 self.clearOutboxState(forCommandID: commandID)
             case .superseded:
@@ -720,6 +784,7 @@ extension OpenClawChatViewModel {
     /// exactly on the unhealthy -> healthy transition.
     func applyTransportHealth(_ ok: Bool, refreshSessionsOnReconnect: Bool = true) {
         let wasHealthy = self.healthOK
+        let refreshBranchesOnReconnect = ok && !wasHealthy && self.hasEstablishedTransportHealth
         self.healthOK = ok
         if !ok, wasHealthy {
             self.invalidateOutboxBranchReconciliation()
@@ -728,13 +793,26 @@ extension OpenClawChatViewModel {
             self.invalidateSessionMetadataReadiness()
         }
         if ok, !wasHealthy {
-            guard self.outbox != nil else { return }
-            if self.hasCurrentSessionMetadata {
+            if refreshBranchesOnReconnect {
+                Task {
+                    await self.refreshSessionBranches()
+                    if self.outbox != nil, self.hasCurrentSessionMetadata {
+                        self.reconcilePendingOutboxBranchScopes()
+                    }
+                }
+            } else if self.outbox != nil, self.hasCurrentSessionMetadata {
                 self.reconcilePendingOutboxBranchScopes()
-            } else if refreshSessionsOnReconnect {
+            }
+            if self.outbox != nil,
+               !self.hasCurrentSessionMetadata,
+               refreshSessionsOnReconnect
+            {
                 let session = self.currentSessionSnapshot()
                 Task { await self.fetchSessions(limit: 50, sessionSnapshot: session) }
             }
+        }
+        if ok {
+            self.hasEstablishedTransportHealth = true
         }
     }
 
@@ -742,6 +820,11 @@ extension OpenClawChatViewModel {
         self.outboxBranchConnectionGeneration &+= 1
         self.reconciledOutboxBranchScopes.removeAll()
         self.reconcilingOutboxBranchScopes.removeAll()
+        for task in self.outboxBranchReconcileRetryTasks.values {
+            task.cancel()
+        }
+        self.outboxBranchReconcileRetryTasks.removeAll()
+        self.outboxBranchReconcileRetryAttempts.removeAll()
     }
 
     // MARK: - Flush

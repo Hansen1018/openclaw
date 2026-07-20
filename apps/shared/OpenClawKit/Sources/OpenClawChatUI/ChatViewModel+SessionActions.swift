@@ -504,11 +504,23 @@ extension OpenClawChatViewModel {
         let initiatingSession = self.currentSessionSnapshot()
         let switchActivity = self.beginSessionBranchSwitchActivity(for: initiatingSession)
         defer { self.endSessionBranchSwitchActivity(switchActivity) }
+        guard await self.beginOutboxBranchSwitch(initiatingSession) else {
+            return
+        }
+        guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else {
+            await self.cancelOutboxBranchSwitch(initiatingSession)
+            return
+        }
         do {
             try await self.transport.switchSessionBranch(
                 sessionKey: initiatingSession.key,
                 leafEntryId: normalizedLeafEntryID)
-            guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
+            guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else {
+                _ = await self.confirmOutboxBranchChange(
+                    initiatingSession,
+                    activeLeafEntryID: normalizedLeafEntryID)
+                return
+            }
             self.replyTarget = nil
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
@@ -516,6 +528,7 @@ extension OpenClawChatViewModel {
                 switchActivity,
                 confirmedLeafEntryID: normalizedLeafEntryID)
         } catch {
+            await self.cancelOutboxBranchSwitch(initiatingSession)
             guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(

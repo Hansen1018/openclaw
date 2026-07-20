@@ -172,7 +172,15 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var reconcilingOutboxBranchScopes: Set<OpenClawChatOutboxScope> = []
     @ObservationIgnored
+    var outboxBranchReconcileRetryAttempts: [OpenClawChatOutboxScope: Int] = [:]
+    @ObservationIgnored
+    var outboxBranchReconcileRetryTasks: [OpenClawChatOutboxScope: Task<Void, Never>] = [:]
+    @ObservationIgnored
+    var outboxBranchReconcileRetryDelaysMs: [UInt64] = [250, 1000, 4000]
+    @ObservationIgnored
     var outboxBranchConnectionGeneration: UInt64 = 0
+    @ObservationIgnored
+    var hasEstablishedTransportHealth = false
     @ObservationIgnored
     var bootstrapOutboxBranchStateCapture: (
         generation: UInt64,
@@ -528,6 +536,9 @@ public final class OpenClawChatViewModel {
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
         self.outboxRetryTask?.cancel()
+        for task in self.outboxBranchReconcileRetryTasks.values {
+            task.cancel()
+        }
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
         self.questionRefreshRetryTask?.cancel()

@@ -96,15 +96,18 @@ public struct OpenClawChatOutboxBranchState: Equatable, Sendable {
     public let epoch: Int
     public let lastActiveLeafEntryID: String?
     public let hadPendingCommands: Bool
+    public let switchPendingSince: TimeInterval?
 
     public init(
         epoch: Int,
         lastActiveLeafEntryID: String?,
-        hadPendingCommands: Bool = false)
+        hadPendingCommands: Bool = false,
+        switchPendingSince: TimeInterval? = nil)
     {
         self.epoch = epoch
         self.lastActiveLeafEntryID = lastActiveLeafEntryID
         self.hadPendingCommands = hadPendingCommands
+        self.switchPendingSince = switchPendingSince
     }
 }
 
@@ -277,6 +280,11 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
     /// Captures the persisted scope state before bootstrap history can advance its tip.
     func branchState(for scope: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState?
+    /// Installs the cross-view-model switch barrier only when no delivery is
+    /// already unresolved for the scope.
+    func beginBranchSwitch(_ scope: OpenClawChatOutboxScope) async -> Bool
+    /// Rolls back a barrier when the server rejected the switch.
+    func cancelBranchSwitch(_ scope: OpenClawChatOutboxScope) async -> Bool
     /// Reconciles a bootstrap branch snapshot before automatic replay is enabled.
     /// A nil active leaf represents a successfully listed empty transcript.
     func reconcileBranchScope(
@@ -304,7 +312,8 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         expectedLastError: String?,
         agentID: String?,
         deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract: String,
+        replacementID: String?) async -> OpenClawChatOutboxUpdateResult
     /// User cancellation succeeds only before a sender claims the row. The
     /// status predicate is the cross-view-model cancellation boundary.
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult
@@ -318,6 +327,14 @@ public protocol OpenClawChatCommandOutbox: Sendable {
 extension OpenClawChatCommandOutbox {
     public func branchState(for _: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState? {
         nil
+    }
+
+    public func beginBranchSwitch(_: OpenClawChatOutboxScope) async -> Bool {
+        false
+    }
+
+    public func cancelBranchSwitch(_: OpenClawChatOutboxScope) async -> Bool {
+        false
     }
 
     public func reconcileBranchScope(
@@ -346,13 +363,34 @@ extension OpenClawChatCommandOutbox {
     }
 
     public func markCommandRetriedIfPresent(
+        id: String,
+        expectedAttemptVersion: Int,
+        expectedRetryCount: Int,
+        expectedLastError: String?,
+        agentID: String?,
+        deliverySessionKey: String,
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+    {
+        await self.markCommandRetriedIfPresent(
+            id: id,
+            expectedAttemptVersion: expectedAttemptVersion,
+            expectedRetryCount: expectedRetryCount,
+            expectedLastError: expectedLastError,
+            agentID: agentID,
+            deliverySessionKey: deliverySessionKey,
+            routingContract: routingContract,
+            replacementID: nil)
+    }
+
+    public func markCommandRetriedIfPresent(
         id _: String,
         expectedAttemptVersion _: Int,
         expectedRetryCount _: Int,
         expectedLastError _: String?,
         agentID _: String?,
         deliverySessionKey _: String,
-        routingContract _: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract _: String,
+        replacementID _: String? = nil) async -> OpenClawChatOutboxUpdateResult
     {
         .unavailable
     }
