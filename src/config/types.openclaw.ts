@@ -186,6 +186,8 @@ export type OpenClawConfig = {
       chatSendShortcut?: "enter" | "modifier-enter";
       /** Follow-up handling while a run is active; unset uses the server queue mode. */
       chatFollowUpMode?: "steer" | "queue";
+      /** Maximum chat message width CSS value. */
+      chatMessageMaxWidth?: string;
       /** Show live agent activity beneath running Control UI sidebar sessions. */
       sidebarLiveActivity?: boolean;
     };
@@ -211,8 +213,6 @@ export type OpenClawConfig = {
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
   attachments?: {
-    /** Preserve original uploaded filenames when storing inbound media. */
-    preserveFilenames?: boolean;
     /** Optional retention window for persisted inbound media cleanup. */
     ttlHours?: number;
   };
