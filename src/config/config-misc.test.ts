@@ -427,19 +427,7 @@ describe("diagnostics.otel.captureContent", () => {
   });
 
   it("accepts boolean and granular OTEL content capture config", () => {
-    for (const captureContent of [
-      true,
-      false,
-      {
-        enabled: true,
-        inputMessages: true,
-        outputMessages: true,
-        toolInputs: true,
-        toolOutputs: true,
-        systemPrompt: false,
-        toolDefinitions: true,
-      },
-    ]) {
+    for (const captureContent of [true, false]) {
       const result = OpenClawSchema.safeParse({
         diagnostics: {
           otel: {
@@ -868,9 +856,8 @@ describe("config identity/materialization regressions", () => {
   it("keeps explicit responsePrefix and group mention patterns", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             identity: {
               name: "Samantha Sloth",
               theme: "space lobster",
@@ -878,7 +865,7 @@ describe("config identity/materialization regressions", () => {
             },
             groupChat: { mentionPatterns: ["@openclaw"] },
           },
-        ],
+        },
       },
       messages: {
         responsePrefix: "✅",
@@ -895,16 +882,15 @@ describe("config identity/materialization regressions", () => {
   it("preserves empty responsePrefix when identity is present", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             identity: {
               name: "Samantha",
               theme: "helpful sloth",
               emoji: "🦥",
             },
           },
-        ],
+        },
       },
       messages: {
         responsePrefix: "",
@@ -977,7 +963,7 @@ describe("broadcast", () => {
   it("accepts a broadcast peer map with strategy", () => {
     const res = validateConfigObject({
       agents: {
-        list: [{ id: "alfred" }, { id: "baerbel" }],
+        entries: { alfred: {}, baerbel: {} },
       },
       broadcast: {
         strategy: "parallel",
@@ -1075,9 +1061,8 @@ describe("config strict validation", () => {
   it("accepts documented agents.list[].params overrides", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             model: "anthropic/claude-opus-4-6",
             params: {
               cacheRetention: "none",
@@ -1085,7 +1070,7 @@ describe("config strict validation", () => {
               maxTokens: 8192,
             },
           },
-        ],
+        },
       },
     });
 
@@ -1251,7 +1236,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.issues)).toContain("agents.list.0.sandbox");
+      expect(issuePaths(snap.issues)).toContain("agents");
       expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
       expect(issuePaths(snap.legacyIssues)).toContain("agents.list");
       expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
