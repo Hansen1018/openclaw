@@ -797,8 +797,7 @@ extension OpenClawChatViewModel {
             // Persist the reconciled transcript, including durable outbox
             // rows retained while canonical history catches up.
             persistTranscriptToCache(
-                sessionKey: request.session.key,
-                agentID: request.session.agentID,
+                session: request.session,
                 messages: nextMessages,
                 canonicalMessageIdempotencyKeys: Set(incoming.compactMap(\.idempotencyKey)))
         }

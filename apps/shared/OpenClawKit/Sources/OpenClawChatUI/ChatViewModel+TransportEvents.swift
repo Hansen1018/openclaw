@@ -60,7 +60,7 @@ extension OpenClawChatViewModel {
                         defer { self.endSessionBranchSwitchActivity(switchActivity) }
                         await self.reconcileSessionBranchChange(
                             switchActivity,
-                            failPendingOutboxCommands: true)
+                            confirmFromBranchRefresh: true)
                     }
                     return
                 }
@@ -116,6 +116,7 @@ extension OpenClawChatViewModel {
         // still retire its durable row before this handler returns early.
         confirmOutboxCommands(in: [sanitized])
         guard isCurrentSession else { return }
+        self.observeOutboxTranscriptTip(sanitized, session: self.currentSessionSnapshot())
 
         self.invalidateHistorySnapshots()
         // The active client also receives the gateway's echo of the user turn it

@@ -167,10 +167,10 @@ public final class OpenClawChatViewModel {
     var isFlushingOutbox = false
     @ObservationIgnored
     var isOutboxFlushRequestedWhileActive = false
-    /// A failed remote branch park must not be undone by bootstrap health recovery.
-    /// Keep automatic replay closed until a later branch park succeeds.
     @ObservationIgnored
-    var isOutboxReplaySuppressedAfterBranchParkingFailure = false
+    var reconciledOutboxBranchScopes: Set<OpenClawChatOutboxScope> = []
+    @ObservationIgnored
+    var reconcilingOutboxBranchScopes: Set<OpenClawChatOutboxScope> = []
     @ObservationIgnored
     var cancelingOutboxCommandIDs: Set<String> = []
     @ObservationIgnored
@@ -664,7 +664,7 @@ public final class OpenClawChatViewModel {
             contractRoutingChanged
         guard bootstrapIdentityChanged else {
             if contractChanged, self.healthOK {
-                flushOutboxIfNeeded()
+                reconcilePendingOutboxBranchScopes()
             }
             return
         }
@@ -819,11 +819,16 @@ extension OpenClawChatViewModel {
 
     func reconcileSessionBranchChange(
         _ activity: SessionBranchSwitchActivity,
-        failPendingOutboxCommands: Bool = false) async
+        confirmedLeafEntryID: String? = nil,
+        confirmFromBranchRefresh: Bool = false) async
     {
         var stateApplied = true
-        if failPendingOutboxCommands {
-            stateApplied = await self.failPendingOutboxCommandsForBranchChange(activity.session)
+        if let confirmedLeafEntryID {
+            stateApplied = await self.confirmOutboxBranchChange(
+                activity.session,
+                activeLeafEntryID: confirmedLeafEntryID)
+        } else if confirmFromBranchRefresh {
+            stateApplied = await self.refreshSessionBranches(confirmingBranchChange: true)
         }
         guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
         if stateApplied {
@@ -834,7 +839,7 @@ extension OpenClawChatViewModel {
                 if stateApplied { break }
             }
         }
-        if stateApplied {
+        if stateApplied, !confirmFromBranchRefresh {
             stateApplied = await self.refreshSessionBranches()
         }
         guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
@@ -876,6 +881,7 @@ extension OpenClawChatViewModel {
         let context = BootstrapContext(
             id: bootstrapGeneration,
             historyRequest: historyRequest)
+        self.pauseOutboxBranchScope(context.session)
         if paintCachedTranscript {
             paintFromCacheIfNeeded(session: context.session)
         }
@@ -1085,7 +1091,7 @@ extension OpenClawChatViewModel {
             persistSessionsToCache(organized)
             self.readySessionMetadataGeneration = metadataGeneration
             if self.healthOK {
-                flushOutboxIfNeeded()
+                reconcilePendingOutboxBranchScopes()
             }
             return
         }

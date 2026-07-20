@@ -396,8 +396,9 @@ extension OpenClawChatViewModel {
     }
 
     @discardableResult
-    public func refreshSessionBranches() async -> Bool {
+    public func refreshSessionBranches(confirmingBranchChange: Bool = false) async -> Bool {
         let session = self.currentSessionSnapshot()
+        self.pauseOutboxBranchScope(session)
         self.sessionBranchesRefreshGeneration &+= 1
         let refreshGeneration = self.sessionBranchesRefreshGeneration
         self.isLoadingSessionBranches = true
@@ -413,7 +414,22 @@ extension OpenClawChatViewModel {
             guard self.isCurrentSession(session),
                   refreshGeneration == self.sessionBranchesRefreshGeneration
             else { return false }
+            let outboxReconciled = if confirmingBranchChange,
+                                      let activeLeafEntryID = Self.activeBranchLeafEntryID(in: response.branches)
+            {
+                await self.confirmOutboxBranchChange(session, activeLeafEntryID: activeLeafEntryID)
+            } else {
+                await self.reconcileOutboxBranchScope(session, branches: response.branches)
+            }
+            guard outboxReconciled,
+                  self.isCurrentSession(session),
+                  refreshGeneration == self.sessionBranchesRefreshGeneration
+            else {
+                self.pauseOutboxBranchScope(session)
+                return false
+            }
             self.sessionBranches = response.branches
+            self.flushOutboxIfNeeded()
             return true
         } catch {
             guard self.isCurrentSession(session),
@@ -421,6 +437,9 @@ extension OpenClawChatViewModel {
             else { return false }
             chatSessionActionsLogger.debug(
                 "sessions.branches.list failed \(error.localizedDescription, privacy: .public)")
+            if Self.branchListingIsUnsupported(error) {
+                self.allowOutboxReplayWithoutBranching(session)
+            }
             return false
         }
     }
@@ -454,7 +473,9 @@ extension OpenClawChatViewModel {
             self.replyTarget = nil
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
-            await self.reconcileSessionBranchChange(switchActivity)
+            await self.reconcileSessionBranchChange(
+                switchActivity,
+                confirmedLeafEntryID: normalizedLeafEntryID)
         } catch {
             guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
             self.errorText = error.localizedDescription

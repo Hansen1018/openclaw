@@ -66,13 +66,13 @@ private func outboxCommand(
     attachments: [OpenClawChatOutboxAttachment] = [],
     thinking: String = "off",
     createdAt: Double = Date().timeIntervalSince1970,
-    branchLeafEntryID: String? = "leaf-main") -> OpenClawChatOutboxCommand
+    branchEpoch: Int = 0) -> OpenClawChatOutboxCommand
 {
     OpenClawChatOutboxCommand(
         id: id,
         sessionKey: sessionKey,
         agentID: agentID,
-        branchLeafEntryID: branchLeafEntryID,
+        branchEpoch: branchEpoch,
         text: text,
         attachments: attachments,
         thinking: thinking,
@@ -541,7 +541,7 @@ struct ChatTranscriptCacheStoreTests {
             nil) == SQLITE_OK)
         #expect(sqlite3_exec(
             raw,
-            "ALTER TABLE outbox_commands DROP COLUMN branch_leaf_entry_id",
+            "ALTER TABLE outbox_commands DROP COLUMN branch_epoch",
             nil,
             nil,
             nil) == SQLITE_OK)
@@ -562,7 +562,7 @@ struct ChatTranscriptCacheStoreTests {
 
         let migrated = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         let commands = await migrated.loadCommands()
-        #expect(commands.map(\.branchLeafEntryID) == [nil, nil, nil, nil, nil, nil])
+        #expect(commands.map(\.branchEpoch) == [0, 0, 0, 0, 0, 0])
         #expect(commands.map(\.agentID) == [nil, nil, nil, nil, nil, nil])
         #expect(commands.map(\.deliverySessionKey) == [
             "",
@@ -589,13 +589,12 @@ struct ChatTranscriptCacheStoreTests {
             expectedLastError: migratedGlobal.lastError,
             agentID: "agent-b",
             deliverySessionKey: "global",
-            routingContract: "per-sender|main|agent-b",
-            branchLeafEntryID: "leaf-b") == .updated)
+            routingContract: "per-sender|main|agent-b") == .updated)
         let retried = await migrated.loadCommands().first { $0.id == "c-global" }
         #expect(retried?.agentID == "agent-b")
         #expect(retried?.deliverySessionKey == "global")
         #expect(retried?.routingContract == "per-sender|main|agent-b")
-        #expect(retried?.branchLeafEntryID == "leaf-b")
+        #expect(retried?.branchEpoch == 0)
         #expect(retried?.status == .queued)
         #expect(retried?.attemptVersion == migratedGlobal.attemptVersion + 1)
     }
@@ -626,8 +625,7 @@ struct ChatTranscriptCacheStoreTests {
             expectedLastError: failed.lastError,
             agentID: nil,
             deliverySessionKey: "unknown",
-            routingContract: "per-sender|main|main",
-            branchLeafEntryID: "leaf-main") == .updated)
+            routingContract: "per-sender|main|main") == .updated)
         let command = try #require(await store.loadCommands().first)
         #expect(command.status == .queued)
         #expect(command.agentID == nil)
@@ -669,8 +667,7 @@ struct ChatTranscriptCacheStoreTests {
             expectedLastError: failed.lastError,
             agentID: "agent-b",
             deliverySessionKey: "agent:agent-b:main",
-            routingContract: "per-sender|main|agent-b",
-            branchLeafEntryID: "leaf-b") == .updated)
+            routingContract: "per-sender|main|agent-b") == .updated)
         #expect(await store.loadTranscript(sessionKey: "main", agentID: "agent-a").isEmpty)
         let command = try #require(await store.loadCommands().first)
         #expect(command.agentID == "agent-b")
@@ -912,7 +909,7 @@ struct ChatCommandOutboxStoreTests {
         #expect(loaded.map(\.retryCount) == [0, 0])
         #expect(loaded.map(\.lastError) == [nil, nil])
         #expect(loaded.map(\.sessionKey) == ["main", "main"])
-        #expect(loaded.map(\.branchLeafEntryID) == ["leaf-main", "leaf-main"])
+        #expect(loaded.map(\.branchEpoch) == [0, 0])
     }
 
     @Test func `claims are FIFO and exclusive until the sender advances`() async throws {
@@ -1361,7 +1358,7 @@ struct ChatCommandOutboxStoreTests {
         #expect(survivors.map(\.status) == [.queued])
     }
 
-    @Test func `branch parking is scoped by gateway session and agent`() async throws {
+    @Test func `branch epoch bump parks only its gateway session and agent scope`() async throws {
         let url = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let storeA = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
@@ -1392,9 +1389,10 @@ struct ChatCommandOutboxStoreTests {
             text: "other gateway",
             createdAt: now + 3)))
 
-        let parked = try #require(await storeA.failPendingCommands(
-            sessionKey: "main",
-            agentID: " Agent-A ",
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: " Agent-A ")
+        let parked = try #require(await storeA.confirmBranchChange(
+            scope,
+            activeLeafEntryID: "leaf-b",
             lastError: "branch changed"))
         let statuses = Dictionary(uniqueKeysWithValues: parked.map { ($0.id, $0.status) })
         #expect(statuses == [
@@ -1402,6 +1400,8 @@ struct ChatCommandOutboxStoreTests {
             "a-other-agent": .queued,
             "a-other-session": .queued,
         ])
+        #expect(await storeA.branchState(for: scope)?.epoch == 1)
+        #expect(await storeA.branchState(for: scope)?.lastActiveLeafEntryID == "leaf-b")
         #expect(await storeB.loadCommands().map(\.status) == [.queued])
     }
 
@@ -1424,9 +1424,9 @@ struct ChatCommandOutboxStoreTests {
             lastError: "previous failure") == .updated)
         let failureBeforeParking = try #require(await parkingStore.loadCommands().first)
 
-        _ = try #require(await parkingStore.failPendingCommands(
-            sessionKey: "main",
-            agentID: "agent-a",
+        _ = try #require(await parkingStore.confirmBranchChange(
+            OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a"),
+            activeLeafEntryID: "leaf-b",
             lastError: "branch changed"))
         #expect(await retryStore.markCommandRetriedIfPresent(
             id: "c-race",
@@ -1435,8 +1435,7 @@ struct ChatCommandOutboxStoreTests {
             expectedLastError: failureBeforeParking.lastError,
             agentID: "agent-a",
             deliverySessionKey: "main",
-            routingContract: "per-sender|main|agent-a",
-            branchLeafEntryID: "leaf-a") == .superseded)
+            routingContract: "per-sender|main|agent-a") == .superseded)
 
         let parked = try #require(await parkingStore.loadCommands().first)
         #expect(parked.status == .failed)
@@ -1449,8 +1448,8 @@ struct ChatCommandOutboxStoreTests {
             expectedLastError: parked.lastError,
             agentID: "agent-a",
             deliverySessionKey: "main",
-            routingContract: "per-sender|main|agent-a",
-            branchLeafEntryID: "leaf-a") == .updated)
+            routingContract: "per-sender|main|agent-a") == .updated)
+        #expect(await parkingStore.loadCommands().first?.branchEpoch == 1)
     }
 
     @Test func `stale delivery callbacks cannot mutate a retried attempt`() async throws {
@@ -1464,9 +1463,9 @@ struct ChatCommandOutboxStoreTests {
             text: "send once")))
         let oldAttempt = try #require(await store.claimNextCommand())
 
-        _ = try #require(await store.failPendingCommands(
-            sessionKey: "main",
-            agentID: "agent-a",
+        _ = try #require(await store.confirmBranchChange(
+            OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a"),
+            activeLeafEntryID: "leaf-b",
             lastError: "branch changed"))
         let parked = try #require(await store.loadCommands().first)
         #expect(await store.markCommandRetriedIfPresent(
@@ -1476,8 +1475,7 @@ struct ChatCommandOutboxStoreTests {
             expectedLastError: parked.lastError,
             agentID: "agent-a",
             deliverySessionKey: "main",
-            routingContract: "per-sender|main|agent-a",
-            branchLeafEntryID: "leaf-a") == .updated)
+            routingContract: "per-sender|main|agent-a") == .updated)
         let newAttempt = try #require(await store.claimNextCommand())
         #expect(newAttempt.attemptVersion == oldAttempt.attemptVersion + 1)
 

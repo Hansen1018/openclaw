@@ -13,14 +13,12 @@ private func makeOutboxDatabaseURL() throws -> URL {
 private func outboxTestCommand(
     id: String,
     text: String,
-    createdAt: Double,
-    branchLeafEntryID: String? = "leaf-new") -> OpenClawChatOutboxCommand
+    createdAt: Double) -> OpenClawChatOutboxCommand
 {
     OpenClawChatOutboxCommand(
         id: id,
         sessionKey: "main",
         routingContract: "per-sender|main|main",
-        branchLeafEntryID: branchLeafEntryID,
         text: text,
         thinking: "off",
         createdAt: createdAt,
@@ -44,6 +42,16 @@ private func outboxTestBranches(activeLeafEntryID: String) -> [OpenClawChatSessi
             updatedAt: nil,
             active: activeLeafEntryID == "leaf-new"),
     ]
+}
+
+private func seedOutboxBranch(
+    _ store: OpenClawChatSQLiteTranscriptCache,
+    sessionKey: String = "main",
+    agentID: String? = nil) async -> Bool
+{
+    await store.updateLastActiveLeafEntryID(
+        "leaf-new",
+        for: OpenClawChatOutboxScope(sessionKey: sessionKey, agentID: agentID))
 }
 
 private func userTexts(_ vm: OpenClawChatViewModel) async -> [String] {
@@ -71,6 +79,8 @@ private actor OutboxTransportState {
     var sendRoutingChanged = false
     var historyFails = false
     var sessionListFails = false
+    var branchListFails = false
+    var branchListRequestCount = 0
     var historyRequestCount = 0
     var heldSendGate: DeleteGate?
     var commandListGate: DeleteGate?
@@ -132,6 +142,14 @@ private actor OutboxTransportState {
 
     func setSessionListFails(_ fails: Bool) {
         self.sessionListFails = fails
+    }
+
+    func setBranchListFails(_ fails: Bool) {
+        self.branchListFails = fails
+    }
+
+    func recordBranchListRequest() {
+        self.branchListRequestCount += 1
     }
 
     func recordHistoryRequest(agentID: String?) {
@@ -200,6 +218,7 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
     private let requiresRoutingContract: Bool
     private let routeUnavailableReason: String?
     private let activeBranchLeafEntryID: String?
+    private let supportsBranchListing: Bool
     private let stream: AsyncStream<OpenClawChatTransportEvent>
     private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
 
@@ -210,7 +229,8 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
         supportsSlashCommands: Bool = false,
         requiresRoutingContract: Bool = true,
         routeUnavailableReason: String? = nil,
-        activeBranchLeafEntryID: String? = "leaf-new")
+        activeBranchLeafEntryID: String? = "leaf-new",
+        supportsBranchListing: Bool = true)
     {
         self.state = OutboxTransportState(healthy: healthy, sendFails: sendFails)
         self.sessions = sessions
@@ -218,6 +238,7 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
         self.requiresRoutingContract = requiresRoutingContract
         self.routeUnavailableReason = routeUnavailableReason
         self.activeBranchLeafEntryID = activeBranchLeafEntryID
+        self.supportsBranchListing = supportsBranchListing
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
         self.stream = AsyncStream { c in cont = c }
         self.continuation = cont
@@ -443,7 +464,16 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
     }
 
     func listSessionBranches(sessionKey _: String) async throws -> OpenClawChatSessionBranchesResponse {
-        OpenClawChatSessionBranchesResponse(
+        await self.state.recordBranchListRequest()
+        if !self.supportsBranchListing {
+            throw GatewayResponseError(
+                method: "sessions.branches.list",
+                code: "INVALID_REQUEST",
+                message: "unknown method: sessions.branches.list",
+                details: nil)
+        }
+        guard await !self.state.branchListFails else { throw OutboxSendError() }
+        return OpenClawChatSessionBranchesResponse(
             branches: outboxTestBranches(activeLeafEntryID: self.activeBranchLeafEntryID ?? ""))
     }
 
@@ -527,6 +557,43 @@ private func queuedStateCount(_ vm: OpenClawChatViewModel) -> Int {
     vm.outboxStatesByMessageID.count
 }
 
+private protocol BranchScopeForwardingOutbox: OpenClawChatCommandOutbox {
+    var branchStateBase: OpenClawChatSQLiteTranscriptCache { get }
+}
+
+extension BranchScopeForwardingOutbox {
+    func reconcileBranchScope(
+        _ scope: OpenClawChatOutboxScope,
+        activeLeafEntryID: String,
+        branchLeafEntryIDs: Set<String>,
+        lastError: String) async -> [OpenClawChatOutboxCommand]?
+    {
+        await self.branchStateBase.reconcileBranchScope(
+            scope,
+            activeLeafEntryID: activeLeafEntryID,
+            branchLeafEntryIDs: branchLeafEntryIDs,
+            lastError: lastError)
+    }
+
+    func confirmBranchChange(
+        _ scope: OpenClawChatOutboxScope,
+        activeLeafEntryID: String,
+        lastError: String) async -> [OpenClawChatOutboxCommand]?
+    {
+        await self.branchStateBase.confirmBranchChange(
+            scope,
+            activeLeafEntryID: activeLeafEntryID,
+            lastError: lastError)
+    }
+
+    func updateLastActiveLeafEntryID(
+        _ leafEntryID: String,
+        for scope: OpenClawChatOutboxScope) async -> Bool
+    {
+        await self.branchStateBase.updateLastActiveLeafEntryID(leafEntryID, for: scope)
+    }
+}
+
 /// Forwarding outbox that can delay `loadCommands`, making restore-vs-send
 /// interleavings deterministic in tests.
 private actor DelayingOutbox: OpenClawChatCommandOutbox {
@@ -536,8 +603,10 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
     private var recoveryAvailable = true
     private var terminalWritesAvailable = true
     private var supersedeNextRetry = false
+    private var claimRelease: DeleteGate?
     private let enqueueStarted = DeleteGate()
     private let recoveryAttempted = DeleteGate()
+    private let claimStarted = DeleteGate()
 
     init(base: OpenClawChatSQLiteTranscriptCache) {
         self.base = base
@@ -561,6 +630,19 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
 
     func supersedeNextRetryAttempt() {
         self.supersedeNextRetry = true
+    }
+
+    func holdNextClaim() {
+        self.claimRelease = DeleteGate()
+    }
+
+    func waitUntilClaimed() async {
+        await self.claimStarted.wait()
+    }
+
+    func releaseClaim() async {
+        await self.claimRelease?.open()
+        self.claimRelease = nil
     }
 
     func waitUntilRecoveryAttempted() async {
@@ -610,7 +692,12 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
     }
 
     func claimNextCommand() async -> OpenClawChatOutboxCommand? {
-        await self.base.claimNextCommand()
+        let command = await self.base.claimNextCommand()
+        if let claimRelease {
+            await self.claimStarted.open()
+            await claimRelease.wait()
+        }
+        return command
     }
 
     func markCommandQueued(
@@ -647,6 +734,37 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
             lastError: lastError)
     }
 
+    func reconcileBranchScope(
+        _ scope: OpenClawChatOutboxScope,
+        activeLeafEntryID: String,
+        branchLeafEntryIDs: Set<String>,
+        lastError: String) async -> [OpenClawChatOutboxCommand]?
+    {
+        await self.base.reconcileBranchScope(
+            scope,
+            activeLeafEntryID: activeLeafEntryID,
+            branchLeafEntryIDs: branchLeafEntryIDs,
+            lastError: lastError)
+    }
+
+    func confirmBranchChange(
+        _ scope: OpenClawChatOutboxScope,
+        activeLeafEntryID: String,
+        lastError: String) async -> [OpenClawChatOutboxCommand]?
+    {
+        await self.base.confirmBranchChange(
+            scope,
+            activeLeafEntryID: activeLeafEntryID,
+            lastError: lastError)
+    }
+
+    func updateLastActiveLeafEntryID(
+        _ leafEntryID: String,
+        for scope: OpenClawChatOutboxScope) async -> Bool
+    {
+        await self.base.updateLastActiveLeafEntryID(leafEntryID, for: scope)
+    }
+
     func markCommandRetriedIfPresent(
         id: String,
         expectedAttemptVersion: Int,
@@ -654,14 +772,13 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
         expectedLastError: String?,
         agentID: String?,
         deliverySessionKey: String,
-        routingContract: String,
-        branchLeafEntryID: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
     {
         if self.supersedeNextRetry {
             self.supersedeNextRetry = false
-            _ = await self.base.failPendingCommands(
-                sessionKey: "main",
-                agentID: agentID,
+            _ = await self.base.confirmBranchChange(
+                OpenClawChatOutboxScope(sessionKey: "main", agentID: agentID),
+                activeLeafEntryID: "leaf-new",
                 lastError: "Branch changed during retry.")
         }
         return await self.base.markCommandRetriedIfPresent(
@@ -671,8 +788,7 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
             expectedLastError: expectedLastError,
             agentID: agentID,
             deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract,
-            branchLeafEntryID: branchLeafEntryID)
+            routingContract: routingContract)
     }
 
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
@@ -686,7 +802,7 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
 
 /// Returns one already-read command snapshot only after the test releases it,
 /// reproducing a restore that resumes after another view canceled the row.
-private actor SnapshotHoldingOutbox: OpenClawChatCommandOutbox {
+private actor SnapshotHoldingOutbox: BranchScopeForwardingOutbox {
     private nonisolated let base: OpenClawChatSQLiteTranscriptCache
     private var captured = DeleteGate()
     private var release = DeleteGate()
@@ -694,6 +810,10 @@ private actor SnapshotHoldingOutbox: OpenClawChatCommandOutbox {
 
     init(base: OpenClawChatSQLiteTranscriptCache) {
         self.base = base
+    }
+
+    nonisolated var branchStateBase: OpenClawChatSQLiteTranscriptCache {
+        self.base
     }
 
     func waitUntilSnapshotCaptured() async {
@@ -787,8 +907,7 @@ private actor SnapshotHoldingOutbox: OpenClawChatCommandOutbox {
         expectedLastError: String?,
         agentID: String?,
         deliverySessionKey: String,
-        routingContract: String,
-        branchLeafEntryID: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
     {
         await self.base.markCommandRetriedIfPresent(
             id: id,
@@ -797,8 +916,7 @@ private actor SnapshotHoldingOutbox: OpenClawChatCommandOutbox {
             expectedLastError: expectedLastError,
             agentID: agentID,
             deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract,
-            branchLeafEntryID: branchLeafEntryID)
+            routingContract: routingContract)
     }
 
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
@@ -812,13 +930,17 @@ private actor SnapshotHoldingOutbox: OpenClawChatCommandOutbox {
 
 /// Holds a completed durable cancellation before its result returns to the
 /// MainActor, making late canonical-proof ordering deterministic.
-private actor CancellationHoldingOutbox: OpenClawChatCommandOutbox {
+private actor CancellationHoldingOutbox: BranchScopeForwardingOutbox {
     private nonisolated let base: OpenClawChatSQLiteTranscriptCache
     private let canceled = DeleteGate()
     private let release = DeleteGate()
 
     init(base: OpenClawChatSQLiteTranscriptCache) {
         self.base = base
+    }
+
+    nonisolated var branchStateBase: OpenClawChatSQLiteTranscriptCache {
+        self.base
     }
 
     func waitUntilCanceled() async {
@@ -894,8 +1016,7 @@ private actor CancellationHoldingOutbox: OpenClawChatCommandOutbox {
         expectedLastError: String?,
         agentID: String?,
         deliverySessionKey: String,
-        routingContract: String,
-        branchLeafEntryID: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
     {
         await self.base.markCommandRetriedIfPresent(
             id: id,
@@ -904,8 +1025,7 @@ private actor CancellationHoldingOutbox: OpenClawChatCommandOutbox {
             expectedLastError: expectedLastError,
             agentID: agentID,
             deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract,
-            branchLeafEntryID: branchLeafEntryID)
+            routingContract: routingContract)
     }
 
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
@@ -939,7 +1059,7 @@ struct ChatViewModelOutboxTests {
         #expect(commands.map(\.status) == [.queued])
         #expect(commands.map(\.sessionKey) == ["main"])
         #expect(commands.map(\.deliverySessionKey) == ["agent:main:main"])
-        #expect(commands.map(\.branchLeafEntryID) == ["leaf-new"])
+        #expect(commands.map(\.branchEpoch) == [0])
 
         // The visible row carries the queued state and the draft was cleared.
         #expect(await MainActor.run { vm.input.isEmpty })
@@ -1016,136 +1136,165 @@ struct ChatViewModelOutboxTests {
         #expect(await transport.state.switchedBranchLeafEntryIDs == ["leaf-new"])
     }
 
-    @Test func `unsupported parking default fails closed and blocks branch switch`() async throws {
+    @Test func `transient branch list failure leaves rows queued and replay paused`() async throws {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
-        let unsupportedOutbox = DelayingOutbox(base: store)
-        let transport = OutboxTestTransport(healthy: false)
-        let vm = await makeOutboxViewModel(transport: transport, outbox: unsupportedOutbox)
-
-        await MainActor.run { vm.load() }
-        try await waitUntil("outbox restore completes") {
-            await MainActor.run { vm.hasRestoredOutboxMessages }
-        }
-        try await sendWhileOffline(vm, text: "keep on this branch")
-        #expect(await unsupportedOutbox.failPendingCommands(
-            sessionKey: "main",
-            agentID: "main",
-            lastError: "branch changed") == nil)
-        await MainActor.run {
-            vm.sessionBranches = outboxTestBranches(activeLeafEntryID: "leaf-active")
-        }
-
-        await vm.switchToBranch("leaf-new")
-
-        #expect(await transport.state.switchedBranchLeafEntryIDs.isEmpty)
-        #expect(await store.loadCommands().map(\.status) == [.queued])
-    }
-
-    @Test func `restart parks an old branch row after remote parking fails`() async throws {
-        let url = try makeOutboxDatabaseURL()
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
-        let unsupportedOutbox = DelayingOutbox(base: store)
-        let transport = OutboxTestTransport(
-            healthy: false,
-            activeBranchLeafEntryID: "leaf-active")
-        let vm = await makeOutboxViewModel(transport: transport, outbox: unsupportedOutbox)
-
-        await MainActor.run { vm.load() }
-        try await waitUntil("outbox restore completes") {
-            await MainActor.run { vm.hasRestoredOutboxMessages }
-        }
-        try await sendWhileOffline(vm, text: "stay parked after reload")
-        #expect(await store.loadCommands().map(\.branchLeafEntryID) == ["leaf-active"])
-        await transport.state.setHealthy(true)
-        await MainActor.run {
-            vm.handleTransportEvent(.sessionsChanged(.init(
-                sessionKey: "main",
-                reason: "branch-switch")))
-        }
-
-        try await waitUntil("branch recovery reload completes") {
-            await MainActor.run {
-                !vm.isLoading && vm.healthOK && vm.hasCurrentSessionMetadata
-            }
-        }
-        try await Task.sleep(for: .milliseconds(50))
-
-        #expect(await MainActor.run { vm.isOutboxReplaySuppressedAfterBranchParkingFailure })
-        #expect(await store.loadCommands().map(\.status) == [.queued])
-        #expect(await transport.state.sentMessages.isEmpty)
-
-        let restartedTransport = OutboxTestTransport(
-            healthy: true,
-            activeBranchLeafEntryID: "leaf-new")
-        let restartedVM = await makeOutboxViewModel(transport: restartedTransport, outbox: store)
-        await MainActor.run { restartedVM.load() }
-
-        try await waitUntil("restart parks old branch command") {
-            await store.loadCommands().first?.status == .failed
-        }
-        #expect(await store.loadCommands().first?.lastError ==
-            OpenClawChatSQLiteTranscriptCache.outboxChangedBranchError)
-        #expect(await restartedTransport.state.sentMessages.isEmpty)
-    }
-
-    @Test func `restart delivers a row stamped with the current branch`() async throws {
-        let url = try makeOutboxDatabaseURL()
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await store.updateLastActiveLeafEntryID(
+            "leaf-new",
+            for: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
-            id: "same-leaf",
+            id: "paused",
             sessionKey: "main",
             deliverySessionKey: "agent:main:main",
             routingContract: "per-sender|main|main",
             agentID: "main",
-            branchLeafEntryID: "leaf-active",
-            text: "still mine",
-            thinking: "off",
-            createdAt: Date().timeIntervalSince1970,
-            status: .queued,
-            retryCount: 0,
-            lastError: nil)))
-        let transport = OutboxTestTransport(
-            healthy: true,
-            activeBranchLeafEntryID: "leaf-active")
-        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
-
-        await MainActor.run { vm.load() }
-        try await waitUntil("same branch command confirms") {
-            await store.loadCommands().isEmpty
-        }
-        #expect(await transport.state.sentMessages == ["still mine"])
-    }
-
-    @Test func `restart parks a legacy row without a branch stamp`() async throws {
-        let url = try makeOutboxDatabaseURL()
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
-        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
-            id: "legacy-null-leaf",
-            sessionKey: "main",
-            deliverySessionKey: "agent:main:main",
-            routingContract: "per-sender|main|main",
-            agentID: "main",
-            branchLeafEntryID: nil,
-            text: "needs review",
+            text: "wait for reconcile",
             thinking: "off",
             createdAt: Date().timeIntervalSince1970,
             status: .queued,
             retryCount: 0,
             lastError: nil)))
         let transport = OutboxTestTransport(healthy: true)
+        await transport.state.setBranchListFails(true)
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
-        try await waitUntil("legacy row parks") {
+        try await waitUntil("branch reconcile attempted") {
+            await transport.state.branchListRequestCount > 0
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await store.loadCommands().map(\.status) == [.queued])
+        #expect(await transport.state.sentMessages.isEmpty)
+        #expect(await MainActor.run { vm.healthOK })
+    }
+
+    @Test func `matching epoch flush uses no branch list lookup`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run { vm.load() }
+        try await waitUntil("branch scope reconciles") {
+            await MainActor.run {
+                vm.reconciledOutboxBranchScopes.contains(
+                    OpenClawChatOutboxScope(sessionKey: "main", agentID: "main"))
+            }
+        }
+        let branchListCount = await transport.state.branchListRequestCount
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "local-epoch",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "offline-safe",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        await MainActor.run { vm.flushOutboxIfNeeded() }
+        try await waitUntil("matching epoch sends") {
+            await transport.state.sentMessages == ["offline-safe"]
+        }
+        #expect(await transport.state.branchListRequestCount == branchListCount)
+    }
+
+    @Test func `ambiguous bootstrap parks pending rows fail closed`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-missing", for: scope))
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "ambiguous",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "manual retry",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        let transport = OutboxTestTransport(healthy: true, activeBranchLeafEntryID: "leaf-new")
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run { vm.load() }
+
+        try await waitUntil("ambiguous row parks") {
             await store.loadCommands().first?.status == .failed
         }
-        #expect(await store.loadCommands().first?.lastError ==
-            OpenClawChatSQLiteTranscriptCache.outboxChangedBranchError)
+        #expect(await transport.state.sentMessages.isEmpty)
+        #expect(await store.branchState(for: scope)?.epoch == 0)
+        #expect(await store.branchState(for: scope)?.lastActiveLeafEntryID == "leaf-new")
+    }
+
+    @Test func `unsupported branching gateway leaves epoch zero rows deliverable`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "legacy-gateway",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "still flows",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        let transport = OutboxTestTransport(healthy: true, supportsBranchListing: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run { vm.load() }
+
+        try await waitUntil("unsupported branch gateway sends") {
+            await transport.state.sentMessages == ["still flows"]
+        }
+        try await waitUntil("unsupported branch gateway confirms") {
+            await store.loadCommands().isEmpty
+        }
+    }
+
+    @Test func `presentation generation change requeues an abandoned claim`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await store.updateLastActiveLeafEntryID(
+            "leaf-new",
+            for: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")))
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "abandoned",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "do not strand",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        let outbox = DelayingOutbox(base: store)
+        await outbox.holdNextClaim()
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        await MainActor.run { vm.load() }
+
+        await outbox.waitUntilClaimed()
+        await MainActor.run {
+            vm.outboxPresentationGeneration &+= 1
+            vm.healthOK = false
+        }
+        await outbox.releaseClaim()
+
+        try await waitUntil("abandoned claim returns to the queue") {
+            await store.loadCommands().first?.status == .queued
+        }
         #expect(await transport.state.sentMessages.isEmpty)
     }
 
@@ -1159,7 +1308,6 @@ struct ChatViewModelOutboxTests {
             deliverySessionKey: "agent:main:main",
             routingContract: "per-sender|main|main",
             agentID: "main",
-            branchLeafEntryID: "leaf-new",
             text: "retry once",
             thinking: "off",
             createdAt: Date().timeIntervalSince1970,
@@ -1215,6 +1363,8 @@ struct ChatViewModelOutboxTests {
         try await waitUntil("remote switch parks queued command") {
             await store.loadCommands().first?.status == .failed
         }
+        #expect(await store.branchState(
+            for: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main"))?.epoch == 1)
         try await waitUntil("failed outbox affordance appears") {
             await MainActor.run {
                 vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
@@ -1433,13 +1583,13 @@ struct ChatViewModelOutboxTests {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await seedOutboxBranch(store, agentID: "alpha"))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "alpha-ultra",
             sessionKey: "main",
             deliverySessionKey: "agent:alpha:main",
             routingContract: "per-sender|main|main",
             agentID: "alpha",
-            branchLeafEntryID: "leaf-new",
             text: "use canonical Luna metadata",
             thinking: "ultra",
             createdAt: Date().timeIntervalSince1970,
@@ -1479,6 +1629,7 @@ struct ChatViewModelOutboxTests {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await seedOutboxBranch(store))
         #expect(await store.enqueueCommand(outboxTestCommand(
             id: "retry-metadata",
             text: "send after retry",
@@ -1726,6 +1877,7 @@ struct ChatViewModelOutboxTests {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await seedOutboxBranch(store))
         let now = Date().timeIntervalSince1970
         #expect(await store.enqueueCommand(outboxTestCommand(id: "c-1", text: "first", createdAt: now)))
         #expect(await store.enqueueCommand(outboxTestCommand(id: "c-2", text: "second", createdAt: now + 1)))
@@ -1922,6 +2074,7 @@ struct ChatViewModelOutboxTests {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await seedOutboxBranch(store))
         #expect(await store.enqueueCommand(outboxTestCommand(
             id: "c-lagging",
             text: "not persisted yet",
@@ -1995,6 +2148,7 @@ struct ChatViewModelOutboxTests {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await seedOutboxBranch(store))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "c-terminal-write",
             sessionKey: "main",
@@ -2200,13 +2354,14 @@ struct ChatViewModelOutboxTests {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await seedOutboxBranch(store, sessionKey: "reasoning-session"))
+        #expect(await seedOutboxBranch(store, sessionKey: "plain-session"))
         let now = Date().timeIntervalSince1970
         #expect(await store.enqueueCommand(
             OpenClawChatOutboxCommand(
                 id: "c-think",
                 sessionKey: "reasoning-session",
                 routingContract: "per-sender|main|main",
-                branchLeafEntryID: "leaf-new",
                 text: "think hard",
                 thinking: "high",
                 createdAt: now,
@@ -2218,7 +2373,6 @@ struct ChatViewModelOutboxTests {
                 id: "c-plain",
                 sessionKey: "plain-session",
                 routingContract: "per-sender|main|main",
-                branchLeafEntryID: "leaf-new",
                 text: "no thinking",
                 thinking: "medium",
                 createdAt: now + 1,
@@ -2252,13 +2406,13 @@ struct ChatViewModelOutboxTests {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await seedOutboxBranch(store, sessionKey: "other-session"))
         // Queued for a session the user is no longer viewing.
         #expect(await store.enqueueCommand(
             OpenClawChatOutboxCommand(
                 id: "c-background",
                 sessionKey: "other-session",
                 routingContract: "per-sender|main|main",
-                branchLeafEntryID: "leaf-new",
                 text: "sent from elsewhere",
                 thinking: "off",
                 createdAt: Date().timeIntervalSince1970,
@@ -2653,12 +2807,12 @@ extension ChatViewModelOutboxTests {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await seedOutboxBranch(store))
         // Persist a row as an earlier process would have.
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: UUID().uuidString,
             sessionKey: "main",
             routingContract: "per-sender|main|main",
-            branchLeafEntryID: "leaf-new",
             text: "queued by the previous launch",
             thinking: "off",
             createdAt: Date().timeIntervalSince1970 - 60,
@@ -2693,12 +2847,12 @@ extension ChatViewModelOutboxTests {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await seedOutboxBranch(store, sessionKey: "second"))
         // Backlog persisted for a session that is not initially visible.
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: UUID().uuidString,
             sessionKey: "second",
             routingContract: "per-sender|main|main",
-            branchLeafEntryID: "leaf-new",
             text: "backlog in second session",
             thinking: "off",
             createdAt: Date().timeIntervalSince1970 - 60,

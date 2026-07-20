@@ -604,10 +604,13 @@ struct ChatViewModelSessionActionTests {
     func `branch change failure funnels through full session reload`(remoteEvent: Bool) async {
         let historyReloadGate = SessionActionCompletionGate()
         let branchesReloadGate = SessionActionCompletionGate()
+        let remoteConfirmationGate = SessionActionCompletionGate()
         let staleBranches = self.branches()
         let freshBranches = self.branches(activeLeafEntryID: "leaf-new")
         let transport = SessionActionTransport(
-            branchListGates: [branchesReloadGate],
+            branchListGates: remoteEvent
+                ? [remoteConfirmationGate, branchesReloadGate]
+                : [branchesReloadGate],
             branches: freshBranches,
             historyGates: [2: historyReloadGate],
             historyFailureIndices: [0, 1])
@@ -619,6 +622,8 @@ struct ChatViewModelSessionActionTests {
             viewModel.handleTransportEvent(.sessionsChanged(.init(
                 sessionKey: "main",
                 reason: "branch-switch")))
+            _ = await self.waitForForkStart(remoteConfirmationGate)
+            remoteConfirmationGate.release()
         } else {
             await viewModel.switchToBranch("leaf-new")
         }
@@ -628,7 +633,7 @@ struct ChatViewModelSessionActionTests {
         #expect(historyReloadStarted)
         #expect(branchesReloadStarted)
         #expect(await transport.historySessionKeys() == ["main", "main", "main"])
-        #expect(await transport.branchListSessionKeys() == ["main"])
+        #expect(await transport.branchListSessionKeys() == (remoteEvent ? ["main", "main"] : ["main"]))
         #expect(viewModel.messages.isEmpty)
         #expect(viewModel.sessionBranches.isEmpty)
         #expect(viewModel.hasAppliedLiveHistory == false)

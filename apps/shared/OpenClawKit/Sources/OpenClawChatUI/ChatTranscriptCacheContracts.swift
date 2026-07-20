@@ -79,6 +79,18 @@ protocol OpenClawChatCanonicalTranscriptMerging: OpenClawChatTranscriptCache {
         canonicalMessageIdempotencyKey: String) async
 }
 
+/// Durable branch ownership is scoped exactly like outbox delivery routing.
+public struct OpenClawChatOutboxScope: Hashable, Sendable {
+    public let sessionKey: String
+    public let agentID: String?
+
+    public init(sessionKey: String, agentID: String?) {
+        self.sessionKey = sessionKey
+        let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+    }
+}
+
 /// One attachment captured with a durable chat command.
 public struct OpenClawChatOutboxAttachment: Codable, Hashable, Sendable {
     public let type: String
@@ -130,9 +142,10 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     /// Durable routing owner, required for the literal `global` session and
     /// retained for ownership checks on canonical agent-scoped keys.
     public let agentID: String?
-    /// Active branch leaf captured when this delivery attempt was queued.
-    /// Automatic replay fails closed when it cannot prove the leaf still owns it.
-    public let branchLeafEntryID: String?
+    /// Local branch generation captured when this delivery attempt was queued.
+    public let branchEpoch: Int
+    /// Scope epoch observed alongside this row snapshot.
+    public let scopeBranchEpoch: Int?
     public let text: String
     /// Attachment bytes remain owned by SQLite until canonical history proves
     /// delivery or the user explicitly deletes the command.
@@ -155,7 +168,8 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         deliverySessionKey: String? = nil,
         routingContract: String? = nil,
         agentID: String? = nil,
-        branchLeafEntryID: String? = nil,
+        branchEpoch: Int = 0,
+        scopeBranchEpoch: Int? = nil,
         text: String,
         attachments: [OpenClawChatOutboxAttachment] = [],
         thinking: String,
@@ -176,8 +190,8 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         self.routingContract = normalizedRoutingContract?.isEmpty == false ? normalizedRoutingContract : nil
         let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
-        let normalizedBranchLeafEntryID = branchLeafEntryID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.branchLeafEntryID = normalizedBranchLeafEntryID?.isEmpty == false ? normalizedBranchLeafEntryID : nil
+        self.branchEpoch = branchEpoch
+        self.scopeBranchEpoch = scopeBranchEpoch ?? branchEpoch
         self.text = text
         self.attachments = attachments
         self.thinking = thinking
@@ -243,14 +257,22 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         attemptVersion: Int,
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
-    /// Parks every unresolved row for one presentation session and agent owner,
-    /// versioning existing failures so a concurrently captured retry loses.
-    /// The default fails closed; supported stores override atomically.
-    /// Returns the updated gateway snapshot, or nil when unsupported or unavailable.
-    func failPendingCommands(
-        sessionKey: String,
-        agentID: String?,
+    /// Reconciles a bootstrap branch snapshot before automatic replay is enabled.
+    func reconcileBranchScope(
+        _ scope: OpenClawChatOutboxScope,
+        activeLeafEntryID: String,
+        branchLeafEntryIDs: Set<String>,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
+    /// Atomically records a confirmed server-side branch change and parks rows
+    /// stamped with the superseded generation.
+    func confirmBranchChange(
+        _ scope: OpenClawChatOutboxScope,
+        activeLeafEntryID: String,
+        lastError: String) async -> [OpenClawChatOutboxCommand]?
+    /// Advances the observed transcript tip without changing branch ownership.
+    func updateLastActiveLeafEntryID(
+        _ leafEntryID: String,
+        for scope: OpenClawChatOutboxScope) async -> Bool
     /// Retry only if the failed row still matches the version shown to the user.
     /// The default fails closed so a store cannot bypass branch-change parking.
     func markCommandRetriedIfPresent(
@@ -260,8 +282,7 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         expectedLastError: String?,
         agentID: String?,
         deliverySessionKey: String,
-        routingContract: String,
-        branchLeafEntryID: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
     /// User cancellation succeeds only before a sender claims the row. The
     /// status predicate is the cross-view-model cancellation boundary.
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult
@@ -273,12 +294,28 @@ public protocol OpenClawChatCommandOutbox: Sendable {
 }
 
 extension OpenClawChatCommandOutbox {
-    public func failPendingCommands(
-        sessionKey _: String,
-        agentID _: String?,
+    public func reconcileBranchScope(
+        _: OpenClawChatOutboxScope,
+        activeLeafEntryID _: String,
+        branchLeafEntryIDs _: Set<String>,
         lastError _: String) async -> [OpenClawChatOutboxCommand]?
     {
         nil
+    }
+
+    public func confirmBranchChange(
+        _: OpenClawChatOutboxScope,
+        activeLeafEntryID _: String,
+        lastError _: String) async -> [OpenClawChatOutboxCommand]?
+    {
+        nil
+    }
+
+    public func updateLastActiveLeafEntryID(
+        _: String,
+        for _: OpenClawChatOutboxScope) async -> Bool
+    {
+        false
     }
 
     public func markCommandRetriedIfPresent(
@@ -288,8 +325,7 @@ extension OpenClawChatCommandOutbox {
         expectedLastError _: String?,
         agentID _: String?,
         deliverySessionKey _: String,
-        routingContract _: String,
-        branchLeafEntryID _: String) async -> OpenClawChatOutboxUpdateResult
+        routingContract _: String) async -> OpenClawChatOutboxUpdateResult
     {
         .unavailable
     }
