@@ -551,9 +551,6 @@
           "blurb": "signal-cli linked device with extra setup for the local REST bridge.",
           "systemImage": "antenna.radiowaves.left.and.right",
           "markdownCapable": true,
-          "setupCapabilities": {
-            "invalidConfigRecovery": true
-          },
           "cliAddOptions": [
             {
               "flags": "--signal-number <e164>",
@@ -562,10 +559,6 @@
             {
               "flags": "--signal-transport <kind>",
               "description": "Signal HTTP transport (external-native or container)"
-            },
-            {
-              "flags": "--signal-transports <json>",
-              "description": "Signal account transport map for atomic legacy recovery"
             },
             {
               "flags": "--http-host <host>",

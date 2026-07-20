@@ -400,19 +400,6 @@ function normalizePackageChannelDoctorCapabilities(
     : undefined;
 }
 
-function normalizePackageChannelSetupCapabilities(
-  setupCapabilities: unknown,
-): PluginPackageChannel["setupCapabilities"] | undefined {
-  if (!isRecord(setupCapabilities)) {
-    return undefined;
-  }
-  const invalidConfigRecovery =
-    typeof setupCapabilities.invalidConfigRecovery === "boolean"
-      ? setupCapabilities.invalidConfigRecovery
-      : undefined;
-  return invalidConfigRecovery === undefined ? undefined : { invalidConfigRecovery };
-}
-
 function normalizePackageChannelCliOptions(
   cliAddOptions: unknown,
 ): PluginPackageChannel["cliAddOptions"] | undefined {
@@ -508,10 +495,6 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
   const doctorCapabilities = normalizePackageChannelDoctorCapabilities(value.doctorCapabilities);
   if (doctorCapabilities) {
     channel.doctorCapabilities = doctorCapabilities;
-  }
-  const setupCapabilities = normalizePackageChannelSetupCapabilities(value.setupCapabilities);
-  if (setupCapabilities) {
-    channel.setupCapabilities = setupCapabilities;
   }
   const cliAddOptions = normalizePackageChannelCliOptions(value.cliAddOptions);
   if (cliAddOptions) {

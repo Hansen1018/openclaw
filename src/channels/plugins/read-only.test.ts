@@ -1236,7 +1236,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
-  it("keeps untrusted explicitly scoped disabled external owners inert during maintenance", () => {
+  it("keeps untrusted disabled external owners inert during maintenance", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
       pluginId: "external-chat-plugin",
       channelId: "external-chat",
@@ -1257,40 +1257,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
         env: { ...process.env },
         includePersistedAuthState: false,
         includeSetupFallbackPlugins: true,
-        scopedChannelIds: ["external-chat"],
-        includeDisabledPluginOwners: true,
-      },
-    );
-
-    expect(pluginIds(plugins)).not.toContain("external-chat");
-    expect(fs.existsSync(setupMarker)).toBe(false);
-    expect(fs.existsSync(fullMarker)).toBe(false);
-  });
-
-  it("keeps explicitly scoped disabled external owners blocked by the denylist", () => {
-    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
-      pluginId: "external-chat-plugin",
-      channelId: "external-chat",
-    });
-    const plugins = listReadOnlyChannelPluginsForConfig(
-      {
-        channels: {
-          "external-chat": { enabled: false, legacyMode: "auto" },
-        },
-        plugins: {
-          load: { paths: [pluginDir] },
-          deny: ["external-chat-plugin"],
-          entries: {
-            "external-chat-plugin": { enabled: false },
-          },
-        },
-      } as never,
-      {
-        env: { ...process.env },
-        includePersistedAuthState: false,
-        includeSetupFallbackPlugins: true,
-        scopedChannelIds: ["external-chat"],
-        includeDisabledPluginOwners: true,
+        maintenanceChannelIds: ["external-chat"],
       },
     );
 

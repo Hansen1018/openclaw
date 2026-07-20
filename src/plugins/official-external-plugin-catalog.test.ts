@@ -190,7 +190,6 @@ describe("official external plugin catalog", () => {
       flags: "--signal-transport <kind>",
       description: "Signal HTTP transport (external-native or container)",
     });
-    expect(signal?.setupCapabilities).toEqual({ invalidConfigRecovery: true });
   });
 
   it("curates featured external plugins with ClawHub install alternatives", () => {

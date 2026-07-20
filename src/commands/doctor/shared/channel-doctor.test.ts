@@ -24,8 +24,7 @@ const READ_ONLY_CHANNEL_DOCTOR_OPTIONS = {
 
 const READ_ONLY_DISABLED_CHANNEL_DOCTOR_OPTIONS = {
   ...READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
-  scopedChannelIds: ["signal"],
-  includeDisabledPluginOwners: true,
+  maintenanceChannelIds: ["signal"],
 } as const;
 
 vi.mock("../../../channels/plugins/registry.js", () => ({

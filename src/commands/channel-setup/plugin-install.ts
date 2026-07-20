@@ -8,13 +8,8 @@ import {
   resolveConfiguredChannelPluginIds,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
-import { normalizePluginsConfigWithResolver } from "../../plugins/config-policy.js";
-import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "../../plugins/discovery.js";
-import { describePluginInstallSource } from "../../plugins/install-source-info.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginLoaderLogger } from "../../plugins/logger.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -85,7 +80,6 @@ function loadChannelSetupPluginRegistry(params: {
   onlyPluginIds?: string[];
   activate?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
-  trustedCatalogOwner?: ChannelPluginCatalogEntry;
 }): PluginRegistry {
   const autoEnabled = applyPluginAutoEnable({ config: params.cfg, env: process.env });
   const resolvedConfig = autoEnabled.config;
@@ -100,13 +94,6 @@ function loadChannelSetupPluginRegistry(params: {
       workspaceDir,
       env: process.env,
     });
-  const trustedOwnerScope = params.trustedCatalogOwner
-    ? resolveTrustedCatalogOwnerDiscovery({
-        cfg: resolvedConfig,
-        entry: params.trustedCatalogOwner,
-        workspaceDir,
-      })
-    : undefined;
   const log = createSubsystemLogger("plugins");
   return loadOpenClawPlugins({
     config: resolvedConfig,
@@ -116,71 +103,10 @@ function loadChannelSetupPluginRegistry(params: {
     cache: false,
     logger: createPluginLoaderLogger(log),
     onlyPluginIds,
-    ...(trustedOwnerScope
-      ? {
-          discovery: trustedOwnerScope.discovery,
-          installRecords: trustedOwnerScope.installRecords,
-        }
-      : {}),
     includeSetupOnlyChannelPlugins: true,
     forceSetupOnlyChannelPlugins: params.forceSetupOnlyChannelPlugins,
     activate: params.activate,
   });
-}
-
-function resolveTrustedCatalogOwnerDiscovery(params: {
-  cfg: OpenClawConfig;
-  entry: ChannelPluginCatalogEntry;
-  workspaceDir: string;
-}): {
-  discovery: PluginDiscoveryResult;
-  installRecords: NonNullable<OpenClawConfig["plugins"]>["installs"];
-} {
-  const pluginId = params.entry.pluginId?.trim() || params.entry.id.trim();
-  const installSource =
-    params.entry.installSource ?? describePluginInstallSource(params.entry.install);
-  const packageName = installSource.npm?.packageName ?? installSource.clawhub?.packageName;
-  const installRecords = {
-    ...loadInstalledPluginIndexInstallRecordsSync({ env: process.env }),
-    ...params.cfg.plugins?.installs,
-  };
-  const normalizedPlugins = normalizePluginsConfigWithResolver(params.cfg.plugins);
-  const discovery = discoverOpenClawPlugins({
-    workspaceDir: params.workspaceDir,
-    extraPaths: normalizedPlugins.loadPaths,
-    installRecords,
-    env: process.env,
-  });
-  if (!pluginId || !packageName) {
-    return { discovery: { ...discovery, candidates: [] }, installRecords };
-  }
-  const manifestRegistry = loadPluginManifestRegistry({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: process.env,
-    discovery,
-    installRecords,
-  });
-  const owner = manifestRegistry.plugins.find(
-    (record) =>
-      record.id === pluginId &&
-      record.packageName === packageName &&
-      (params.entry.origin === "bundled"
-        ? record.origin === "bundled"
-        : params.entry.trustedSourceLinkedOfficialInstall === true &&
-          record.trustedOfficialInstall === true),
-  );
-  // Recovery code is executable. Scope discovery to the already-verified manifest root so a
-  // same-id or same-package candidate with higher discovery precedence cannot run first.
-  return {
-    discovery: {
-      ...discovery,
-      candidates: owner
-        ? discovery.candidates.filter((candidate) => candidate.rootDir === owner.rootDir)
-        : [],
-    },
-    installRecords,
-  };
 }
 
 function resolveScopedChannelPluginId(params: {
@@ -223,7 +149,6 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   pluginId?: string;
   workspaceDir?: string;
   forceSetupOnlyChannelPlugins?: boolean;
-  trustedCatalogOwner?: ChannelPluginCatalogEntry;
 }): PluginRegistry {
   const scopedPluginId = resolveScopedChannelPluginId({
     cfg: params.cfg,

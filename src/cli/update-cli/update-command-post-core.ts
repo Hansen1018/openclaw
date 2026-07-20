@@ -303,7 +303,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       effectiveChannel ??
       DEFAULT_PACKAGE_CHANNEL;
     const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-    const updateResult = await updatePluginsAfterCoreUpdate({
+    return await updatePluginsAfterCoreUpdate({
       root,
       channel: postDoctorChannel,
       configSnapshot,
@@ -319,9 +319,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
       pluginInstallRecords,
     });
-    return updateResult;
   });
-
   const completedPluginUpdate = await completePostCorePluginUpdate({
     root,
     pluginUpdate: initialPluginUpdate,

@@ -145,8 +145,7 @@ type ReadOnlyChannelPluginOptions = {
   activationSourceConfig?: OpenClawConfig;
   includePersistedAuthState?: boolean;
   includeSetupFallbackPlugins?: boolean;
-  scopedChannelIds?: readonly string[];
-  includeDisabledPluginOwners?: boolean;
+  maintenanceChannelIds?: readonly string[];
 };
 
 type ReadOnlyChannelPluginResolution = {
@@ -228,8 +227,7 @@ function resolveReadOnlyChannelPluginResolutionCacheKey(params: {
     `state:${params.options.stateDir ?? ""}`,
     `workspace:${params.workspaceDir}`,
     `setup:${params.options.includeSetupFallbackPlugins === true}`,
-    `scope:${params.options.scopedChannelIds?.join(",") ?? ""}`,
-    `disabled-owners:${params.options.includeDisabledPluginOwners === true}`,
+    `maintenance:${params.options.maintenanceChannelIds?.join(",") ?? ""}`,
   ].join("\0");
 }
 
@@ -878,7 +876,7 @@ function resolveExternalReadOnlyChannelPluginIds(params: {
 function isTrustedInvalidConfigRecoveryOwner(record: PluginManifestRecord): boolean {
   return (
     record.trustedOfficialInstall === true &&
-    record.packageChannel?.setupCapabilities?.invalidConfigRecovery === true
+    record.packageInstall?.allowInvalidConfigRecovery === true
   );
 }
 
@@ -974,15 +972,15 @@ export function resolveReadOnlyChannelPluginsForConfig(
           includePersistedAuthState: options.includePersistedAuthState,
           manifestRecords,
         })),
-    ...(options.scopedChannelIds ?? []),
+    ...(options.maintenanceChannelIds ?? []),
   ]).filter(isSafeManifestChannelId);
-  // Doctor cleanup may reactivate only a trusted official owner that explicitly declares invalid
-  // config recovery. Arbitrary disabled plugin code must stay inert while config is untrusted.
-  const discoveryActivationSourceConfig = options.includeDisabledPluginOwners
+  // Maintenance can execute plugin code, so only reactivate an installed official owner that
+  // already opted into invalid-config recovery. Arbitrary disabled plugins remain inert.
+  const discoveryActivationSourceConfig = options.maintenanceChannelIds
     ? resolveMaintenanceActivationSourceConfig({
         config: activationSourceConfig,
         records: externalManifestRecords,
-        channelIds: configuredChannelIds,
+        channelIds: options.maintenanceChannelIds,
       })
     : activationSourceConfig;
   const byId = new Map<string, ChannelPlugin>();
@@ -1036,7 +1034,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
     workspaceDir,
     env,
   });
-  const maintenanceExternalPluginIds = options.includeDisabledPluginOwners
+  const maintenanceExternalPluginIds = options.maintenanceChannelIds
     ? resolveExternalReadOnlyChannelPluginIds({
         cfg: discoveryActivationSourceConfig,
         activationSourceConfig: discoveryActivationSourceConfig,

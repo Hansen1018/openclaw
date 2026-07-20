@@ -353,8 +353,7 @@ type ApplyAccountConfigParams = Parameters<
 >[0];
 
 function createSignalPlugin(
-  afterAccountConfigWritten?: SignalAfterAccountConfigWritten,
-  setupOverrides: Partial<NonNullable<ChannelPlugin["setup"]>> = {},
+  afterAccountConfigWritten: SignalAfterAccountConfigWritten,
 ): ChannelPlugin {
   return {
     ...createChannelTestPluginBase({
@@ -377,7 +376,6 @@ function createSignalPlugin(
         },
       }),
       afterAccountConfigWritten,
-      ...setupOverrides,
     },
   } as ChannelPlugin;
 }
@@ -480,235 +478,6 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("No channel changes made.");
   });
 
-  it("lets an opted-in trusted channel repair its own invalid config during explicit setup", async () => {
-    const config = {
-      channels: {
-        signal: {
-          enabled: true,
-          httpUrl: "http://127.0.0.1:8080",
-          mode: "native",
-        },
-      },
-    } as OpenClawConfig;
-    const afterAccountConfigWritten = vi.fn(async () => undefined);
-    const plugin = createSignalPlugin(afterAccountConfigWritten);
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
-    const catalogEntry: ChannelPluginCatalogEntry = {
-      id: "signal",
-      pluginId: "signal",
-      trustedSourceLinkedOfficialInstall: true,
-      meta: plugin.meta,
-      setupCapabilities: { invalidConfigRecovery: true },
-      install: {
-        npmSpec: "@openclaw/signal",
-        defaultChoice: "npm",
-        allowInvalidConfigRecovery: true,
-      },
-    };
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
-    catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(catalogEntry);
-    // Recovery must refresh an already-installed owner in case core advanced first.
-    discoveryMocks.isCatalogChannelInstalled.mockReturnValue(true);
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]),
-    );
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      valid: false,
-      sourceConfig: config,
-      config,
-      issues: [{ path: "channels.signal.mode", message: "legacy Signal transport" }],
-    });
-
-    await channelsAddCommand(
-      { channel: "signal", account: "ops", signalNumber: "+15550001" },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(catalogMocks.listChannelPluginCatalogEntries).toHaveBeenCalledWith({
-      excludeWorkspace: true,
-      excludeOrigins: ["config", "workspace", "global"],
-    });
-    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({ entry: catalogEntry, promptInstall: false }),
-    );
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    expect(writtenChannel("signal")).toMatchObject({
-      enabled: true,
-      accounts: { ops: { account: "+15550001" } },
-    });
-  });
-
-  it("rejects a recovery result that leaves the selected channel invalid", async () => {
-    const config = {
-      channels: {
-        signal: {
-          apiMode: "native",
-          allowFrom: "invalid",
-        },
-      },
-    } as OpenClawConfig;
-    const onAccountConfigChanged = vi.fn(async () => undefined);
-    const plugin = {
-      ...createSignalPlugin(undefined, {
-        applyAccountConfig: ({ cfg, accountId, input }: ApplyAccountConfigParams) => ({
-          ...cfg,
-          channels: {
-            ...cfg.channels,
-            signal: {
-              enabled: true,
-              allowFrom: "invalid" as never,
-              transport: { kind: "managed-native" },
-              accounts: {
-                [accountId]: { account: input.signalNumber },
-              },
-            },
-          },
-        }),
-      }),
-      lifecycle: { onAccountConfigChanged },
-    } as ChannelPlugin;
-    const catalogEntry: ChannelPluginCatalogEntry = {
-      id: "signal",
-      pluginId: "signal",
-      trustedSourceLinkedOfficialInstall: true,
-      meta: plugin.meta,
-      setupCapabilities: { invalidConfigRecovery: true },
-      install: { npmSpec: "@openclaw/signal", defaultChoice: "npm" },
-    };
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
-    catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(catalogEntry);
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]),
-    );
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      valid: false,
-      sourceConfig: config,
-      config,
-      issues: [
-        { path: "channels.signal.apiMode", message: "legacy Signal transport" },
-        { path: "channels.signal.allowFrom", message: "expected array" },
-      ],
-    });
-
-    await channelsAddCommand(
-      { channel: "signal", account: "ops", signalNumber: "+15550001" },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("channels.signal.allowFrom"),
-    );
-    expect(onAccountConfigChanged).not.toHaveBeenCalled();
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("keeps invalid config recovery bound to the initially approved shipped owner", async () => {
-    const config = {
-      channels: { signal: { mode: "native" } },
-      plugins: {
-        enabled: true,
-        allow: ["signal-shadow"],
-        entries: { "signal-shadow": { enabled: true } },
-      },
-    } as OpenClawConfig;
-    const officialPlugin = createSignalPlugin();
-    const shadowApplyAccountConfig = vi.fn();
-    const shadowPlugin = createSignalPlugin(undefined, {
-      applyAccountConfig: shadowApplyAccountConfig,
-    });
-    const officialEntry: ChannelPluginCatalogEntry = {
-      id: "signal",
-      trustedSourceLinkedOfficialInstall: true,
-      meta: officialPlugin.meta,
-      setupCapabilities: { invalidConfigRecovery: true },
-      install: { npmSpec: "@openclaw/signal", defaultChoice: "npm" },
-    };
-    const shadowEntry: ChannelPluginCatalogEntry = {
-      id: "signal",
-      pluginId: "signal-shadow",
-      origin: "config",
-      meta: shadowPlugin.meta,
-      setupCapabilities: { invalidConfigRecovery: true },
-      install: { npmSpec: "signal-shadow", defaultChoice: "npm" },
-    };
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "signal-shadow", plugin: shadowPlugin, source: "test" }]),
-    );
-    catalogMocks.listChannelPluginCatalogEntries.mockImplementation((options) =>
-      options?.excludeOrigins ? [officialEntry] : [shadowEntry],
-    );
-    catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(shadowEntry);
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([{ pluginId: "signal", plugin: officialPlugin, source: "test" }]),
-    );
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      valid: false,
-      sourceConfig: config,
-      config,
-      issues: [{ path: "channels.signal.mode", message: "legacy Signal transport" }],
-    });
-
-    await channelsAddCommand(
-      { channel: "signal", account: "ops", signalNumber: "+15550001" },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "signal",
-        pluginId: "signal",
-        trustedCatalogOwner: officialEntry,
-      }),
-    );
-    expect(shadowApplyAccountConfig).not.toHaveBeenCalled();
-    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not reuse install-only invalid config recovery during channel setup", async () => {
-    const config = {
-      channels: { signal: { mode: "native" } },
-    } as OpenClawConfig;
-    const plugin = createSignalPlugin();
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "signal",
-        pluginId: "signal",
-        trustedSourceLinkedOfficialInstall: true,
-        meta: plugin.meta,
-        install: {
-          npmSpec: "@openclaw/signal",
-          defaultChoice: "npm",
-          allowInvalidConfigRecovery: true,
-        },
-      },
-    ]);
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      valid: false,
-      sourceConfig: config,
-      config,
-      issues: [{ path: "channels.signal.mode", message: "legacy Signal transport" }],
-    });
-
-    await channelsAddCommand(
-      { channel: "signal", account: "ops", signalNumber: "+15550001" },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
-  });
-
   it("preselects an installable catalog channel in guided setup", async () => {
     const config: OpenClawConfig = { channels: {} };
     configMocks.readConfigFileSnapshot.mockResolvedValue({
@@ -777,6 +546,61 @@ describe("channelsAddCommand", () => {
     );
 
     expect(lifecycleMocks.onAccountConfigChanged).not.toHaveBeenCalled();
+  });
+
+  it("prepares setup input without promoting an owner-kept root account", async () => {
+    const prepareAccountConfigInput = vi.fn(({ input }) => ({
+      ...input,
+      signalTransport: "external-native" as const,
+    }));
+    const applyAccountConfig = vi.fn(({ cfg }: ApplyAccountConfigParams) => cfg);
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "signal", label: "Signal" }),
+      setup: {
+        prepareAccountConfigInput,
+        skipSingleAccountPromotion: true,
+        applyAccountConfig,
+      },
+    } as ChannelPlugin;
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
+    const config: OpenClawConfig = {
+      channels: {
+        signal: {
+          account: "+15555550123",
+          transport: { kind: "managed-native", httpPort: 8080 },
+        },
+      },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config,
+      sourceConfig: config,
+    });
+
+    await channelsAddCommand(
+      {
+        channel: "signal",
+        account: "work",
+        httpUrl: "http://signal-work:8080",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(prepareAccountConfigInput).toHaveBeenCalledTimes(1);
+    expect(applyAccountConfigCall(applyAccountConfig as unknown as MockCallSource).input).toEqual(
+      expect.objectContaining({
+        httpUrl: "http://signal-work:8080",
+        signalTransport: "external-native",
+      }),
+    );
+    const setupConfig = applyAccountConfigCall(applyAccountConfig as unknown as MockCallSource)
+      .cfg as OpenClawConfig;
+    expect(setupConfig.channels?.signal?.transport).toEqual({
+      kind: "managed-native",
+      httpPort: 8080,
+    });
+    expect(setupConfig.channels?.signal?.accounts?.default).toBeUndefined();
   });
 
   it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {
@@ -1430,92 +1254,6 @@ describe("channelsAddCommand", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       'Channel signal post-setup warning for "ops": hook failed',
     );
-  });
-
-  it("prepares account setup input before applying and writing it", async () => {
-    const prepareAccountConfigInput = vi.fn(async ({ input }) => ({
-      ...input,
-      signalTransport: "container" as const,
-    }));
-    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => ({
-      ...cfg,
-      channels: { signal: { transportKind: input.signalTransport } },
-    }));
-    const plugin = createSignalPlugin(undefined, {
-      prepareAccountConfigInput,
-      applyAccountConfig,
-    });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
-
-    await channelsAddCommand(
-      { channel: "signal", account: "ops", httpUrl: "http://signal:8080" },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(prepareAccountConfigInput).toHaveBeenCalledTimes(1);
-    expect(applyAccountConfigCall(applyAccountConfig).input).toMatchObject({
-      httpUrl: "http://signal:8080",
-      signalTransport: "container",
-    });
-    expect(writtenChannel("signal")).toEqual({ transportKind: "container" });
-  });
-
-  it("preserves owner-managed root config while adding a named account", async () => {
-    const config = {
-      channels: {
-        signal: {
-          account: "+15555550111",
-          transport: { kind: "managed-native", httpPort: 8080 },
-          accounts: {
-            work: {
-              account: "+15555550222",
-              transport: { kind: "managed-native", httpPort: 8081 },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const plugin = createSignalPlugin(undefined, {
-      skipSingleAccountPromotion: true,
-      applyAccountConfig: ({ cfg, accountId, input }) => ({
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          signal: {
-            ...cfg.channels?.signal,
-            accounts: {
-              ...cfg.channels?.signal?.accounts,
-              [accountId]: { account: input.signalNumber },
-            },
-          },
-        },
-      }),
-    });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
-
-    await channelsAddCommand(
-      { channel: "signal", account: "personal", signalNumber: "+15555550333" },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(writtenChannel("signal")).toEqual({
-      account: "+15555550111",
-      transport: { kind: "managed-native", httpPort: 8080 },
-      accounts: {
-        work: {
-          account: "+15555550222",
-          transport: { kind: "managed-native", httpPort: 8081 },
-        },
-        personal: { account: "+15555550333" },
-      },
-    });
   });
 
   it("rechecks persistent authority before direct account post-setup hooks", async () => {

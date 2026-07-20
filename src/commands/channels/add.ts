@@ -2,7 +2,6 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
-import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
@@ -14,7 +13,6 @@ import {
   formatUnsupportedChannelActionMessage,
 } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { validateConfigObjectRawWithPlugins } from "../../config/validation.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
@@ -25,11 +23,7 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
 import { applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel } from "./runtime-label.js";
-import {
-  rejectInvalidConfigFileSnapshot,
-  requireValidConfigFileSnapshot,
-  shouldUseWizard,
-} from "./shared.js";
+import { requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
 type ChannelSetupPluginInstallModule = typeof import("../channel-setup/plugin-install.js");
 type OnboardChannelsModule = typeof import("../onboard-channels.js");
@@ -57,18 +51,7 @@ export type ChannelsAddOptions = {
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
 const NEXTCLOUD_TALK_CLI_ALIASES = new Set(["nextcloud-talk", "nc-talk", "nc"]);
 
-function isShippedSetupRecoveryOwner(entry: ChannelPluginCatalogEntry | undefined): boolean {
-  return (
-    (entry?.origin === "bundled" || entry?.trustedSourceLinkedOfficialInstall === true) &&
-    entry.setupCapabilities?.invalidConfigRecovery === true
-  );
-}
-
-async function resolveCatalogChannelEntry(
-  raw: string,
-  cfg: OpenClawConfig | null,
-  opts?: { trustedRecoveryOnly?: boolean },
-) {
+async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
@@ -83,12 +66,7 @@ async function resolveCatalogChannelEntry(
       )
     : await import("../../channels/plugins/catalog.js").then(
         ({ listRawChannelPluginCatalogEntries }) =>
-          listRawChannelPluginCatalogEntries({
-            excludeWorkspace: true,
-            ...(opts?.trustedRecoveryOnly
-              ? { excludeOrigins: ["config", "workspace", "global"] }
-              : {}),
-          }),
+          listRawChannelPluginCatalogEntries({ excludeWorkspace: true }),
       );
   return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
@@ -166,26 +144,7 @@ async function channelsAddCommandImpl(
   runtime: RuntimeEnv,
   params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
-  const useWizard = shouldUseWizard(params);
-  const rawChannel = opts.channel ?? "";
-  const recoveryCatalogEntry = useWizard
-    ? undefined
-    : await resolveCatalogChannelEntry(rawChannel, null, { trustedRecoveryOnly: true });
-  // Invalid config may reach setup only through a trusted owner that explicitly opted its
-  // setup adapter into recovery. Install recovery is a separate, narrower capability.
-  const recoveryChannelId = isShippedSetupRecoveryOwner(recoveryCatalogEntry)
-    ? normalizeChannelId(recoveryCatalogEntry?.id ?? "")
-    : undefined;
-  const recoveryCatalogPluginId = recoveryCatalogEntry?.pluginId?.trim();
-  const recoveryPluginId = recoveryChannelId
-    ? recoveryCatalogPluginId || recoveryCatalogEntry?.id.trim()
-    : undefined;
-  const configSnapshot = await requireValidConfigFileSnapshot(
-    runtime,
-    recoveryChannelId
-      ? { invalidConfigRecoveryPathPrefix: `channels.${recoveryChannelId}` }
-      : undefined,
-  );
+  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
     return;
   }
@@ -194,6 +153,7 @@ async function channelsAddCommandImpl(
   let nextConfig = cfg;
   let pluginRegistrySourceChanged = false;
 
+  const useWizard = shouldUseWizard(params);
   if (useWizard) {
     const { resolveInitialWizardChannel, runChannelsAddWizardFlow } =
       await import("./add-wizard.js");
@@ -211,17 +171,9 @@ async function channelsAddCommandImpl(
     return;
   }
 
-  const recoveringInvalidConfig = configSnapshot.exists && !configSnapshot.valid;
-  if (recoveringInvalidConfig && (!recoveryChannelId || !recoveryCatalogEntry)) {
-    rejectInvalidConfigFileSnapshot(runtime, configSnapshot);
-    return;
-  }
-  // Invalid config cannot participate in owner selection. Keep the exact shipped catalog owner
-  // that authorized recovery so a configured same-channel shadow cannot replace its setup code.
-  let channel = recoveringInvalidConfig ? recoveryChannelId : normalizeChannelId(rawChannel);
-  let catalogEntry = recoveringInvalidConfig
-    ? recoveryCatalogEntry
-    : await resolveCatalogChannelEntry(rawChannel, nextConfig);
+  const rawChannel = opts.channel ?? "";
+  let channel = normalizeChannelId(rawChannel);
+  let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
   // May load a scoped plugin when the channel is not already registered.
@@ -229,8 +181,7 @@ async function channelsAddCommandImpl(
     channelId: ChannelId,
     pluginId?: string,
   ): Promise<ChannelPlugin | undefined> => {
-    // Recovery must load the selected manifest owner, never a pre-registered same-id shadow.
-    const existing = recoveringInvalidConfig ? undefined : getLoadedChannelPlugin(channelId);
+    const existing = getLoadedChannelPlugin(channelId);
     if (existing?.setup?.applyAccountConfig) {
       return existing;
     }
@@ -241,39 +192,31 @@ async function channelsAddCommandImpl(
       runtime,
       channel: channelId,
       ...(pluginId ? { pluginId } : {}),
-      ...(recoveringInvalidConfig && recoveryCatalogEntry
-        ? { trustedCatalogOwner: recoveryCatalogEntry }
-        : {}),
       workspaceDir: resolveWorkspaceDir(),
       forceSetupOnlyChannelPlugins: true,
     });
-    const scopedOwner =
+    return (
       snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin ??
-      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin;
-    return recoveringInvalidConfig
-      ? scopedOwner
-      : (scopedOwner ?? getBundledChannelSetupPlugin(channelId) ?? existing);
+      getBundledChannelSetupPlugin(channelId) ??
+      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      existing
+    );
   };
 
   if (catalogEntry) {
     const workspaceDir = resolveWorkspaceDir();
     const { isCatalogChannelInstalled } = await import("../channel-setup/discovery.js");
-    const registeredPlugin =
-      channel && !recoveringInvalidConfig ? getLoadedChannelPlugin(channel) : undefined;
-    const bundledSetupPlugin =
-      channel && !recoveringInvalidConfig ? getBundledChannelSetupPlugin(channel) : undefined;
-    // Core may have advanced before an external channel owner. Refresh the approved catalog
-    // package before recovery so stale setup code cannot write the retired config shape again.
-    const catalogOwnerNeedsInstall =
-      recoveringInvalidConfig ||
-      (!registeredPlugin &&
-        !bundledSetupPlugin &&
-        !isCatalogChannelInstalled({
-          cfg: nextConfig,
-          entry: catalogEntry,
-          workspaceDir,
-        }));
-    if (catalogOwnerNeedsInstall) {
+    const registeredPlugin = channel ? getLoadedChannelPlugin(channel) : undefined;
+    const bundledSetupPlugin = channel ? getBundledChannelSetupPlugin(channel) : undefined;
+    if (
+      !registeredPlugin &&
+      !bundledSetupPlugin &&
+      !isCatalogChannelInstalled({
+        cfg: nextConfig,
+        entry: catalogEntry,
+        workspaceDir,
+      })
+    ) {
       const { ensureChannelSetupPluginInstalled } = await loadChannelSetupPluginInstall();
       const prompter = createClackPrompter();
       const result = await ensureChannelSetupPluginInstalled({
@@ -309,10 +252,7 @@ async function channelsAddCommandImpl(
     return;
   }
 
-  const plugin = await loadScopedPlugin(
-    channel,
-    recoveringInvalidConfig ? recoveryPluginId : catalogEntry?.pluginId,
-  );
+  const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
   if (!plugin?.setup?.applyAccountConfig) {
     runtime.error(
       `${formatUnsupportedChannelActionMessage({
@@ -374,16 +314,6 @@ async function channelsAddCommandImpl(
     input,
     plugin,
   });
-  if (recoveringInvalidConfig) {
-    const recoveredValidation = validateConfigObjectRawWithPlugins(nextConfig);
-    if (!recoveredValidation.ok) {
-      rejectInvalidConfigFileSnapshot(runtime, {
-        ...configSnapshot,
-        issues: recoveredValidation.issues,
-      });
-      return;
-    }
-  }
   if (plugin.lifecycle?.onAccountConfigChanged) {
     await params?.beforePersistentEffect?.();
     await plugin.lifecycle.onAccountConfigChanged({

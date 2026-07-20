@@ -6,7 +6,11 @@ import { describe, expect, it, vi } from "vitest";
 import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
+import { applyPostPluginConfigValidation } from "./update-command-fresh-doctor.js";
+import {
+  updatePluginsAfterCoreUpdate,
+  type PostCorePluginUpdateResult,
+} from "./update-command-plugins.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
@@ -47,6 +51,45 @@ describe("resolveGatewayInstallEntrypoint", () => {
     await expect(
       resolveGatewayInstallEntrypoint(root, async (candidate) => candidate === entryPath),
     ).resolves.toBe(entryPath);
+  });
+});
+
+describe("applyPostPluginConfigValidation", () => {
+  const pluginUpdate = {
+    status: "ok",
+    changed: true,
+    sync: {
+      changed: true,
+      switchedToBundled: [],
+      switchedToNpm: [],
+      warnings: [],
+      errors: [],
+    },
+    npm: { changed: true, outcomes: [] },
+    integrityDrifts: [],
+    warnings: [],
+  } satisfies PostCorePluginUpdateResult;
+
+  it("fails closed when updated plugin migrations leave config invalid", () => {
+    expect(applyPostPluginConfigValidation(pluginUpdate, false)).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+      warnings: [
+        {
+          guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
+        },
+      ],
+    });
+  });
+
+  it("preserves an earlier plugin update error", () => {
+    const failed = {
+      ...pluginUpdate,
+      status: "error" as const,
+      reason: "plugin-sync-failed",
+    };
+
+    expect(applyPostPluginConfigValidation(failed, false)).toBe(failed);
   });
 });
 

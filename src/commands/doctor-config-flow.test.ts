@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelDoctorConfigMutation } from "../channels/plugins/types.adapters.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -19,7 +20,9 @@ const callGatewayMock = vi.hoisted(() => vi.fn());
 const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
 const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
-const collectChannelDoctorStaleConfigMutationsMock = vi.hoisted(() => vi.fn(async () => []));
+const collectChannelDoctorStaleConfigMutationsMock = vi.hoisted(() =>
+  vi.fn<() => Promise<ChannelDoctorConfigMutation[]>>(async () => []),
+);
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   vi.fn<(cfg: unknown) => string[]>(() => []),
 );

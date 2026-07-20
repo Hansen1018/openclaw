@@ -8,7 +8,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import {
-  rejectInvalidConfigFileSnapshot,
   requireValidConfigFileSnapshot,
   requireValidConfigSnapshot,
 } from "../config-validation.js";
@@ -16,7 +15,7 @@ import {
 export type ChatChannel = ChannelId;
 
 export { requireValidConfigSnapshot };
-export { rejectInvalidConfigFileSnapshot, requireValidConfigFileSnapshot };
+export { requireValidConfigFileSnapshot };
 
 /** Load valid channel command config with read-only secret resolution applied. */
 export async function requireValidConfig(

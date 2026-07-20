@@ -493,37 +493,6 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.skills).toEqual(["commands"]);
   });
 
-  it("preserves setup capabilities from persisted package channel metadata", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-
-    const index = createIndex(rootDir);
-    const registry = loadPluginManifestRegistryForInstalledIndex({
-      index: {
-        ...index,
-        plugins: [
-          {
-            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
-            packageChannel: {
-              id: "installed",
-              label: "Installed",
-              setupCapabilities: { invalidConfigRecovery: true },
-            },
-          },
-        ],
-      },
-      env: {
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-      includeDisabled: true,
-    });
-
-    expect(registry.plugins[0]?.packageManifest?.channel?.setupCapabilities).toEqual({
-      invalidConfigRecovery: true,
-    });
-  });
-
   it("hydrates package channel command metadata while reconstructing from an older index", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");

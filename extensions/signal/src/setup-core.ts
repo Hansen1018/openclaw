@@ -1,9 +1,5 @@
 // Signal plugin module implements setup core behavior.
-import {
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-  resolveAccountEntry,
-} from "openclaw/plugin-sdk/account-resolution";
+import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import {
   createCliPathTextInput,
@@ -33,7 +29,6 @@ import {
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
 import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
-import { migrateLegacySignalTransportConfigSync } from "./config-compat.js";
 import {
   prepareSignalManagedNativeTransport,
   resolveConfiguredSignalTransport,
@@ -50,84 +45,6 @@ const MAX_E164_DIGITS = 15;
 const DIGITS_ONLY = /^\d+$/;
 const INVALID_SIGNAL_ACCOUNT_ERROR =
   "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
-
-type ExplicitSignalTransportSelection = {
-  accountId: string;
-  kind: "external-native" | "container";
-  url: string;
-};
-
-function parseSignalTransportSelections(value: unknown): ExplicitSignalTransportSelection[] {
-  if (value === undefined) {
-    return [];
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error("Signal --signal-transports must be a non-empty JSON object.");
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("Signal --signal-transports must be valid JSON.");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Signal --signal-transports must be a JSON object keyed by account id.");
-  }
-  const selections: ExplicitSignalTransportSelection[] = [];
-  const accountIds = new Set<string>();
-  for (const [rawAccountId, rawSelection] of Object.entries(parsed)) {
-    const accountId = normalizeOptionalAccountId(rawAccountId);
-    if (!accountId) {
-      throw new Error(`Signal --signal-transports has an invalid account id: ${rawAccountId}`);
-    }
-    if (accountIds.has(accountId)) {
-      throw new Error(`Signal --signal-transports repeats normalized account id: ${accountId}`);
-    }
-    if (!rawSelection || typeof rawSelection !== "object" || Array.isArray(rawSelection)) {
-      throw new Error(`Signal transport selection for account "${accountId}" must be an object.`);
-    }
-    const selection = rawSelection as Record<string, unknown>;
-    if (selection.kind !== "external-native" && selection.kind !== "container") {
-      throw new Error(
-        `Signal transport selection for account "${accountId}" must use external-native or container.`,
-      );
-    }
-    if (typeof selection.url !== "string") {
-      throw new Error(`Signal transport selection for account "${accountId}" requires a URL.`);
-    }
-    selections.push({
-      accountId,
-      kind: selection.kind,
-      url: normalizeSignalTransportUrl(selection.url),
-    });
-    accountIds.add(accountId);
-  }
-  if (selections.length === 0) {
-    throw new Error("Signal --signal-transports must select at least one account.");
-  }
-  return selections;
-}
-
-function mergeSignalTransportSelections(
-  selections: readonly ExplicitSignalTransportSelection[],
-): ExplicitSignalTransportSelection[] {
-  const merged = new Map<string, ExplicitSignalTransportSelection>();
-  for (const selection of selections) {
-    merged.set(normalizeAccountId(selection.accountId), selection);
-  }
-  return [...merged.values()];
-}
-
-function hasSignalTargetSetupInput(input: ChannelSetupInput): boolean {
-  return Boolean(
-    input.signalTransport ||
-    normalizeOptionalString(input.signalNumber) ||
-    normalizeOptionalString(input.cliPath) ||
-    normalizeOptionalString(input.httpUrl) ||
-    normalizeOptionalString(input.httpHost) ||
-    normalizeOptionalString(input.httpPort),
-  );
-}
 
 export function normalizeSignalAccountInput(value: string | null | undefined): string | null {
   const trimmed = normalizeOptionalString(value);
@@ -189,7 +106,7 @@ function buildSignalSetupPatch(input: {
   const transport = input.httpUrl
     ? {
         kind: input.signalTransport,
-        url: input.httpUrl,
+        url: normalizeSignalTransportUrl(input.httpUrl),
       }
     : input.cliPath || input.httpHost || input.httpPort
       ? {
@@ -407,12 +324,6 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter({
       if (input.signalTransport && !input.httpUrl) {
         return "Signal --signal-transport requires --http-url.";
       }
-      let transportSelections: ExplicitSignalTransportSelection[];
-      try {
-        transportSelections = parseSignalTransportSelections(input.signalTransports);
-      } catch (error) {
-        return error instanceof Error ? error.message : String(error);
-      }
       if (input.httpPort !== undefined && !isValidSignalManagedNativePort(Number(input.httpPort))) {
         return "Signal --http-port must be an integer between 1 and 65535.";
       }
@@ -423,32 +334,14 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter({
       ) {
         return "Signal container transport requires --signal-number or an existing account.";
       }
-      for (const selection of transportSelections) {
-        if (
-          selection.kind === "container" &&
-          !(
-            normalizeAccountId(selection.accountId) === normalizeAccountId(accountId) &&
-            normalizeSignalAccountInput(input.signalNumber)
-          ) &&
-          !normalizeSignalAccountInput(
-            resolveSignalSetupAccount({
-              cfg,
-              accountId: selection.accountId,
-            }),
-          )
-        ) {
-          return `Signal container transport for account "${selection.accountId}" requires an existing account.`;
-        }
-      }
       if (
         !input.signalNumber &&
         !input.httpUrl &&
         !input.httpHost &&
         !input.httpPort &&
-        !input.cliPath &&
-        transportSelections.length === 0
+        !input.cliPath
       ) {
-        return "Signal requires --signal-number, --signal-transports, or --http-url/--http-host/--http-port/--cli-path.";
+        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
       }
       return null;
     },
@@ -465,61 +358,20 @@ export const signalSetupAdapter: ChannelSetupAdapter = {
     await prepareSignalSetupInput({ cfg, accountId, input }),
   applyAccountConfig: (params) => {
     const accountId = normalizeAccountId(params.accountId);
-    const transportSelections = mergeSignalTransportSelections([
-      ...parseSignalTransportSelections(params.input.signalTransports),
-      ...(params.input.signalTransport && params.input.httpUrl
-        ? [
-            {
-              accountId,
-              kind: params.input.signalTransport,
-              url: normalizeSignalTransportUrl(params.input.httpUrl),
-            },
-          ]
-        : []),
-    ]);
-    // An explicit protocol choice may recover the selected endpoint and siblings that inherit
-    // that same endpoint. Never guess the protocol for unrelated account endpoints.
-    const recovery = migrateLegacySignalTransportConfigSync(
-      params.cfg,
-      transportSelections.length > 0
-        ? {
-            ambiguousTransportSelections: transportSelections,
-          }
-        : undefined,
-    );
-    if (recovery.warnings?.length) {
-      throw new Error(
-        "Signal has other ambiguous legacy account endpoints. Resolve each endpoint explicitly or bring them online and run openclaw doctor --fix.",
-      );
-    }
-    const recoveredCfg = recovery.config;
-    const rootTransport = recoveredCfg.channels?.signal?.transport;
+    const rootTransport = params.cfg.channels?.signal?.transport;
     const nestedDefaultTransport =
       accountId === DEFAULT_ACCOUNT_ID
-        ? resolveAccountEntry(recoveredCfg.channels?.signal?.accounts, DEFAULT_ACCOUNT_ID)
-            ?.transport
+        ? resolveAccountEntry(params.cfg.channels?.signal?.accounts, DEFAULT_ACCOUNT_ID)?.transport
         : undefined;
     const cfg = nestedDefaultTransport
       ? writeSignalAccountTransport({
-          cfg: recoveredCfg,
+          cfg: params.cfg,
           accountId,
           // The root owns the default account. A nested copy is promoted only when
           // no canonical root exists; otherwise this write merely removes the stale copy.
           transport: rootTransport ?? nestedDefaultTransport,
         })
-      : recoveredCfg;
-    const targetSelected = transportSelections.some(
-      (selection) => normalizeAccountId(selection.accountId) === accountId,
-    );
-    if (
-      params.input.signalTransports !== undefined &&
-      !targetSelected &&
-      !hasSignalTargetSetupInput(params.input)
-    ) {
-      // A batch map can repair named accounts without selecting the CLI's implicit default.
-      // Do not turn that placeholder target into a new managed daemon as a side effect.
-      return cfg;
-    }
+      : params.cfg;
     const next = signalSetupAdapterBase.applyAccountConfig?.({ ...params, cfg, accountId }) ?? cfg;
     const configuredTransport = resolveConfiguredSignalTransport(next, accountId);
     if (configuredTransport && configuredTransport.kind !== "managed-native") {

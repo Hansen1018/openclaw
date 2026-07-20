@@ -140,15 +140,16 @@ function safeGetBundledChannelPlugin(id: string) {
 
 function safeListReadOnlyChannelPlugins(
   context: ChannelDoctorLookupContext,
-  options: { channelIds?: readonly string[]; includeDisabled?: boolean } = {},
+  options: { maintenanceChannelIds?: readonly string[] } = {},
 ) {
   try {
     return resolveReadOnlyChannelPluginsForConfig(context.cfg, {
       ...(context.env ? { env: context.env } : {}),
       includePersistedAuthState: false,
       includeSetupFallbackPlugins: true,
-      ...(options.channelIds ? { scopedChannelIds: options.channelIds } : {}),
-      ...(options.includeDisabled ? { includeDisabledPluginOwners: true } : {}),
+      ...(options.maintenanceChannelIds
+        ? { maintenanceChannelIds: options.maintenanceChannelIds }
+        : {}),
     }).plugins;
   } catch {
     return [];
@@ -157,7 +158,7 @@ function safeListReadOnlyChannelPlugins(
 
 function listReadOnlyChannelPluginsById(
   context: ChannelDoctorLookupContext,
-  options: { channelIds?: readonly string[]; includeDisabled?: boolean } = {},
+  options: { maintenanceChannelIds?: readonly string[] } = {},
 ): Map<string, ChannelDoctorPluginCandidate> {
   return new Map(
     safeListReadOnlyChannelPlugins(context, options).map((plugin) => [plugin.id, plugin]),
@@ -233,8 +234,7 @@ function listChannelDoctorEntries(
   const readOnlyPluginsById =
     options.readOnlyPluginsById ??
     listReadOnlyChannelPluginsById(context, {
-      ...(options.includeDisabled ? { channelIds: [...selectedIds] } : {}),
-      includeDisabled: options.includeDisabled,
+      ...(options.includeDisabled ? { maintenanceChannelIds: [...selectedIds] } : {}),
     });
 
   const entries: ChannelDoctorEntry[] = [];

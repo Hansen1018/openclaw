@@ -26,7 +26,7 @@ const LEGACY_TRANSPORT_FIELDS = [
 ] as const;
 
 const PENDING_LEGACY_TRANSPORT_WARNING =
-  '- channels.signal: legacy auto transport is ambiguous while its endpoint is unavailable; bring the endpoint online, choose one account transport explicitly with "openclaw channels add --channel signal --account <id> --http-url <url> --signal-transport external-native|container", or recover distinct endpoints atomically with --signal-transports <json>.';
+  "- channels.signal: legacy auto transport is ambiguous while its endpoint is unavailable; bring the endpoint online and rerun openclaw doctor --fix, or replace the retired fields with an explicit account-owned transport in openclaw.json.";
 const PENDING_LEGACY_INVALID_URL_WARNING =
   "- channels.signal: legacy httpUrl is invalid; keep the current config, correct httpUrl, then run openclaw doctor --fix.";
 const PENDING_LEGACY_INVALID_HOST_WARNING =
@@ -38,14 +38,6 @@ type DetectTransport = (params: {
   url: string;
   account?: string;
 }) => Promise<SignalTransportConfig>;
-
-type ExplicitSignalTransportKind = Exclude<SignalTransportConfig["kind"], "managed-native">;
-
-type ExplicitSignalTransportSelection = {
-  accountId: string;
-  kind: ExplicitSignalTransportKind;
-  url: string;
-};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -256,7 +248,6 @@ function resolveLegacyTransportWithoutDetection(params: {
   entry: Record<string, unknown>;
   parent: Record<string, unknown>;
   apiMode: unknown;
-  ambiguousTransportKind?: ExplicitSignalTransportKind;
 }): SignalTransportConfig | undefined {
   if (isSignalTransportConfig(params.entry.transport)) {
     return params.entry.transport;
@@ -272,9 +263,7 @@ function resolveLegacyTransportWithoutDetection(params: {
       : { kind: "external-native", url: baseUrl };
   }
   if (requiresDetection(params.entry, params.parent, params.apiMode)) {
-    return params.ambiguousTransportKind
-      ? { kind: params.ambiguousTransportKind, url: baseUrl }
-      : undefined;
+    return undefined;
   }
   if (autoStart === false) {
     return { kind: "external-native", url: baseUrl };
@@ -307,7 +296,7 @@ async function resolveLegacyTransport(params: {
     return detected;
   } catch {
     // Shipped auto mode could select either protocol at the same URL. Do not guess while the
-    // endpoint is down; the warning points to the explicit account-owned setup selection path.
+    // endpoint is down; the warning points to an explicit account-owned config replacement.
     return undefined;
   }
 }
@@ -346,16 +335,6 @@ function resolveSignalAccountKey(
   return Object.keys(accounts).find(
     (key) => Boolean(key.trim()) && normalizeAccountId(key) === normalizedAccountId,
   );
-}
-
-function signalAccountIdForEntry(
-  entries: Record<string, unknown>[],
-  index: number,
-): string | undefined {
-  if (index === 0) {
-    return hasRootSignalAccount(entries) ? DEFAULT_ACCOUNT_ID : undefined;
-  }
-  return signalAccountIds(entries)[index - 1];
 }
 
 function nestedDefaultOwnsEffectiveTransport(entries: Record<string, unknown>[]): boolean {
@@ -623,7 +602,6 @@ export async function migrateLegacySignalTransportConfig(params: {
 
 export function migrateLegacySignalTransportConfigSync(
   cfg: OpenClawConfig,
-  options?: { ambiguousTransportSelections?: readonly ExplicitSignalTransportSelection[] },
 ): ChannelDoctorConfigMutation {
   const signal = cfg.channels?.signal as unknown;
   if (!isRecord(signal)) {
@@ -642,26 +620,7 @@ export function migrateLegacySignalTransportConfigSync(
   const legacyResolutionEntries = migrationEntries.filter(
     (entry) => !isSignalTransportConfig(entry.transport),
   );
-  const selections = (options?.ambiguousTransportSelections ?? []).map((selection) => ({
-    accountId: normalizeAccountId(selection.accountId),
-    kind: selection.kind,
-    url: normalizeSignalTransportUrl(selection.url),
-  }));
-  const selectedEntries = new Set(
-    selections.flatMap((selection) => {
-      const index = entries.findIndex((_, entryIndex) => {
-        const entryAccountId = signalAccountIdForEntry(entries, entryIndex);
-        return Boolean(
-          entryAccountId && normalizeAccountId(entryAccountId) === selection.accountId,
-        );
-      });
-      return index >= 0 ? [entries[index]] : [];
-    }),
-  );
-  const unresolvedLegacyEntries = legacyResolutionEntries.filter(
-    (entry) => !selectedEntries.has(entry),
-  );
-  const invalidDerivedEndpoint = findInvalidLegacyDerivedEndpoint(unresolvedLegacyEntries, signal);
+  const invalidDerivedEndpoint = findInvalidLegacyDerivedEndpoint(legacyResolutionEntries, signal);
   if (invalidDerivedEndpoint) {
     return {
       config: cfg,
@@ -673,7 +632,7 @@ export function migrateLegacySignalTransportConfigSync(
       ],
     };
   }
-  if (hasInvalidLegacyHttpUrl(unresolvedLegacyEntries, signal)) {
+  if (hasInvalidLegacyHttpUrl(legacyResolutionEntries, signal)) {
     return {
       config: cfg,
       changes: [],
@@ -683,27 +642,6 @@ export function migrateLegacySignalTransportConfigSync(
   const resolvedTransports = entries.map((entry, index) => {
     if (!shouldMaterializeTransport(entries, index)) {
       return undefined;
-    }
-    const accountId = signalAccountIdForEntry(entries, index);
-    const entryUrl = (() => {
-      try {
-        return legacyBaseUrl(entry, signal);
-      } catch {
-        return undefined;
-      }
-    })();
-    const normalizedAccountId = accountId ? normalizeAccountId(accountId) : undefined;
-    const selection =
-      (normalizedAccountId
-        ? selections.find((candidate) => candidate.accountId === normalizedAccountId)
-        : undefined) ??
-      (entryUrl !== undefined && !isSignalTransportConfig(entry.transport)
-        ? selections.find((candidate) => entryUrl === candidate.url)
-        : undefined);
-    if (selection) {
-      // Explicit setup owns both protocol and endpoint. It must be able to replace a malformed
-      // shipped URL instead of trying to normalize the retired value first.
-      return { kind: selection.kind, url: selection.url };
     }
     return resolveLegacyTransportWithoutDetection({
       entry,
