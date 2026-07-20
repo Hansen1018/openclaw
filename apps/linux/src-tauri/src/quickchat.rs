@@ -284,6 +284,7 @@ fn build_agents(catalog: &AgentsListResult) -> Result<Vec<QuickChatAgent>, Strin
     let agents = catalog
         .agents
         .iter()
+        .filter(|summary| summary.kind.as_deref() != Some("system"))
         .map(|summary| {
             let id = summary.id.clone();
             let identity = summary.identity.as_ref();
@@ -826,6 +827,7 @@ mod tests {
             agents: vec![
                 crate::gateway_ws::GatewayAgentSummary {
                     id: "main".to_string(),
+                    kind: Some("agent".to_string()),
                     name: Some("Configured".to_string()),
                     identity: Some(crate::gateway_ws::GatewayAgentIdentity {
                         name: Some("Molty".to_string()),
@@ -835,7 +837,14 @@ mod tests {
                 },
                 crate::gateway_ws::GatewayAgentSummary {
                     id: "other".to_string(),
+                    kind: None,
                     name: None,
+                    identity: None,
+                },
+                crate::gateway_ws::GatewayAgentSummary {
+                    id: "ordinary-looking-id".to_string(),
+                    kind: Some("system".to_string()),
+                    name: Some("System".to_string()),
                     identity: None,
                 },
             ],
@@ -849,6 +858,7 @@ mod tests {
             Some("data:image/png;base64,AA==")
         );
         assert_eq!(agents[1].name, "other");
+        assert_eq!(agents.len(), 2);
     }
 
     #[test]

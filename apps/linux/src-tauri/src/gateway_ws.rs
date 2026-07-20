@@ -25,6 +25,7 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
+const AGENT_KIND_CLIENT_CAPABILITY: &str = "agent-kind";
 const GATEWAY_STATE_EVENT: &str = "quickchat:gateway-state";
 const CHAT_EVENT: &str = "quickchat:chat-event";
 const GATEWAY_DEVICE_IDENTITY_FILE: &str = "quickchat-gateway-device.json";
@@ -183,6 +184,7 @@ pub(crate) struct GatewayAgentIdentity {
 #[derive(Clone, Deserialize)]
 pub(crate) struct GatewayAgentSummary {
     pub id: String,
+    pub kind: Option<String>,
     pub name: Option<String>,
     pub identity: Option<GatewayAgentIdentity>,
 }
@@ -994,7 +996,7 @@ fn connect_params(
             "mode": CLIENT_MODE,
             "deviceFamily": CLIENT_DEVICE_FAMILY
         },
-        "caps": [],
+        "caps": [AGENT_KIND_CLIENT_CAPABILITY],
         "commands": [],
         "permissions": {},
         "role": CLIENT_ROLE,
@@ -1469,6 +1471,10 @@ mod tests {
         assert_eq!(frame["method"], "connect");
         assert_eq!(frame["params"]["minProtocol"], MIN_PROTOCOL_VERSION);
         assert_eq!(frame["params"]["maxProtocol"], MAX_PROTOCOL_VERSION);
+        assert_eq!(
+            frame["params"]["caps"],
+            json!([AGENT_KIND_CLIENT_CAPABILITY])
+        );
         assert_eq!(frame["params"]["client"]["id"], CLIENT_ID);
         assert_eq!(
             frame["params"]["client"]["deviceFamily"],
