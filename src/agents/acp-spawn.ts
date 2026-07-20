@@ -37,7 +37,9 @@ import {
   listSessionEntries,
   loadSessionEntry,
   resolveSessionTranscriptRuntimeTarget,
+  upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -58,7 +60,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import { recordSubagentSpawned } from "../sessions/session-state-events.js";
+import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
@@ -1239,6 +1241,7 @@ export async function spawnAcpDirect(
   }
 
   let sessionCreated = false;
+  let childCreationEntry: SessionEntry | undefined;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
   const childIdem = crypto.randomUUID();
   const parentAgentId = parentSessionKey
@@ -1284,18 +1287,32 @@ export async function spawnAcpDirect(
   };
   const adapter: SpawnBackendAdapter<AcpBackendState> = {
     async initialize() {
-      await callGateway({
-        method: "sessions.patch",
-        params: {
-          key: sessionKey,
-          spawnedBy: requesterInternalKey,
-          ...admission.childSessionPatch,
-          ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
-          ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
-          ...(params.label ? { label: params.label } : {}),
-        },
-        timeoutMs: 10_000,
+      const creationStamp = buildSessionCreationStamp({
+        via: "spawn",
+        actor: { type: "agent", id: requesterInternalKey },
       });
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+      const childSessionPatch = admission.childSessionPatch
+        ? {
+            spawnDepth: admission.childSessionPatch.spawnDepth,
+            ...(admission.childSessionPatch.subagentRole
+              ? { subagentRole: admission.childSessionPatch.subagentRole }
+              : {}),
+            subagentControlScope: admission.childSessionPatch.subagentControlScope,
+          }
+        : {};
+      childCreationEntry =
+        (await upsertSessionEntry(
+          { storePath, sessionKey },
+          {
+            ...creationStamp,
+            spawnedBy: requesterInternalKey,
+            ...childSessionPatch,
+            ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
+            ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+            ...(params.label ? { label: params.label } : {}),
+          },
+        )) ?? undefined;
       sessionCreated = true;
       const initializedSession = await initializeAcpSpawnRuntime({
         cfg,
@@ -1332,6 +1349,13 @@ export async function spawnAcpDirect(
         binding: state.binding,
       });
       // ACP bypasses the native adapter, so seed the same child lineage before dispatch.
+      if (childCreationEntry) {
+        recordSessionCreated({
+          sessionKey,
+          agentId: targetAgentId,
+          entry: childCreationEntry,
+        });
+      }
       recordSubagentSpawned({
         childSessionKey: sessionKey,
         childRunId: childIdem,

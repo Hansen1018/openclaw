@@ -27,6 +27,7 @@ import {
   type GatewayMethodDispatchResponse,
   unwrapGatewayMethodDispatchResponse,
 } from "./server-in-process-dispatch.js";
+import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -245,6 +246,7 @@ type DispatchGatewayMethodInProcessOptions = {
   onAccepted?: (payload: unknown) => void;
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  sessionCreation?: TrustedSessionCreation;
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
   timeoutMs?: number;
@@ -285,6 +287,7 @@ export async function dispatchGatewayMethodInProcessRaw(
     ...(options?.runtimePluginToolGrant
       ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
       : {}),
+    ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: options?.syntheticScopes,
   });
   const scopedClient = mergePluginRuntimeClientInternal(
