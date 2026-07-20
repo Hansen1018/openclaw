@@ -1311,7 +1311,7 @@ export async function startGatewayServer(
     sessionMessageSubscribers,
     listRegisteredNodePluginToolCommands: () => pluginRegistry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
-    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.skills?.enabled !== false,
+    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
   });
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
@@ -1601,8 +1601,8 @@ export async function startGatewayServer(
           removeChatRun,
           agentRunSeq,
           nodeSendToSession,
-          ...(typeof cfgAtStart.media?.ttlHours === "number"
-            ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
+          ...(typeof cfgAtStart.attachments?.ttlHours === "number"
+            ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.attachments.ttlHours) }
             : {}),
           skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
           getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,
