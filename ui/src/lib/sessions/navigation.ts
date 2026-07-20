@@ -238,7 +238,8 @@ export function filterVisibleSessionRows(
       !row.archived &&
       row.kind !== "global" &&
       row.kind !== "unknown" &&
-      (options.showCron === true || (row.kind !== "cron" && !isCronSessionKey(row.key))) &&
+      (options.showCron === true ||
+        ((row.kind as string) !== "cron" && !isCronSessionKey(row.key))) &&
       !isSubagentSessionKey(row.key) &&
       !row.spawnedBy &&
       (!options.filterByAgent ||

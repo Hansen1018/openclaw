@@ -2211,6 +2211,8 @@ export function buildGatewaySessionRow(params: {
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
+    // The live registry controller takes precedence over the persisted spawner.
+    controlOwnerSessionKey: subagentOwner || entry?.spawnedBy,
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
@@ -2221,6 +2223,11 @@ export function buildGatewaySessionRow(params: {
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
+    createdVia: entry?.createdVia,
+    createdActor: entry?.createdActor,
+    createdAt: entry?.createdAt,
+    forkSource: entry?.forkSource,
+    previousSessionId: entry?.previousSessionId,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
     category: entry?.category,
@@ -2274,7 +2281,8 @@ export function buildGatewaySessionRow(params: {
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
-    parentSessionKey: subagentOwner || entry?.parentSessionKey,
+    // Navigation lineage is persisted; runtime control is exposed separately above.
+    parentSessionKey: entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
     effectiveResponseUsage: resolveEffectiveResponseUsage(

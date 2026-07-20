@@ -691,7 +691,7 @@ describe("sessions view", () => {
         buildProps(
           buildResult({
             key: "agent:main:cron:daily-digest",
-            kind: "cron",
+            kind: "direct",
             updatedAt: Date.now(),
           }),
         ),
@@ -1362,7 +1362,7 @@ describe("sessions view", () => {
             },
             {
               key: "agent:main:idle",
-              kind: "cron",
+              kind: "direct",
               updatedAt: 1,
               unread: true,
               totalTokens: 300,
@@ -1511,8 +1511,9 @@ describe("sessions view", () => {
         buildProps(
           buildMultiResult([
             {
-              key: "agent:main:live",
-              kind: "cron",
+              // Cron display kind derives from the key shape, never the wire kind.
+              key: "agent:main:cron:live",
+              kind: "direct",
               updatedAt: 2,
               hasActiveRun: true,
               status: "running",

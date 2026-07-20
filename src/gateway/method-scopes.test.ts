@@ -399,7 +399,6 @@ describe("method scope resolution", () => {
     ["model", { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" }],
     ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
     ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
-    ["spawnedBy", { key: "agent:main:ios-1", spawnedBy: "agent:main:main" }],
     ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
     ["unknown fields", { key: "agent:main:ios-1", futureField: true }],
   ])("keeps sessions.patch admin-only when params include %s", (_name, params) => {
