@@ -24219,20 +24219,20 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "分支"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "分支"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Ramificações"
           }
         },
         "de": {
@@ -24243,20 +24243,20 @@
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Ramas"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "ブランチ"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "브랜치"
           }
         },
         "fr": {
@@ -24267,80 +24267,80 @@
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "शाखाएँ"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "الفروع"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Rami"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Dallar"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Гілки"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Cabang"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Gałęzie"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "แบรนช์"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Các nhánh"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Vertakkingen"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "شاخه‌ها"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Ветки"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Branches"
+            "state": "translated",
+            "value": "Förgreningar"
           }
         }
       }
@@ -185787,128 +185787,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "未命名分支"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "未命名的分支"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Ramificação sem título"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Unbenannter Branch"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Rama sin título"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "名称未設定のブランチ"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "제목 없는 브랜치"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Branche sans titre"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "शीर्षकहीन शाखा"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "فرع بلا عنوان"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Ramo senza titolo"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Adsız dal"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Гілка без назви"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Cabang tanpa judul"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Gałąź bez tytułu"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "แบรนช์ไม่มีชื่อ"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Nhánh chưa đặt tên"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Naamloze vertakking"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "شاخه بدون عنوان"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Безымянная ветка"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Untitled branch"
+            "state": "translated",
+            "value": "Namnlös förgrening"
           }
         }
       }
@@ -196939,44 +196939,44 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld 条消息](inflect: true)"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld 則訊息](inflect: true)"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld mensagem](inflect: true)"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld Nachricht](inflect: true)"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld mensaje](inflect: true)"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld件のメッセージ](inflect: true)"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld개의 메시지](inflect: true)"
           }
         },
         "fr": {
@@ -196987,80 +196987,80 @@
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld संदेश](inflect: true)"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld رسالة](inflect: true)"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld messaggio](inflect: true)"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld ileti](inflect: true)"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld повідомлення](inflect: true)"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld pesan](inflect: true)"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld wiadomość](inflect: true)"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld ข้อความ](inflect: true)"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld tin nhắn](inflect: true)"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld bericht](inflect: true)"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld پیام](inflect: true)"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld сообщение](inflect: true)"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "^[%lld message](inflect: true)"
+            "state": "translated",
+            "value": "^[%lld meddelande](inflect: true)"
           }
         }
       }
