@@ -753,14 +753,7 @@ extension OpenClawChatSQLiteTranscriptCache {
         guard !self.isRetired, let db = await handle(), self.ensureBranchScopeRow(db, scope: scope)
         else { return nil }
         guard let state = self.readBranchState(db, scope: scope),
-              let pendingCount = self.selectInt(
-                  db,
-                  sql: """
-                  SELECT COUNT(*) FROM outbox_commands
-                  WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
-                    AND status IN ('queued', 'sending', 'awaiting_confirmation')
-                  """,
-                  bindings: self.scopeBindings(scope))
+              let pendingCount = self.unconfirmedCommandCount(db, scope: scope)
         else { return nil }
         return OpenClawChatOutboxBranchState(
             epoch: state.epoch,
@@ -781,15 +774,7 @@ extension OpenClawChatSQLiteTranscriptCache {
         guard self.ensureBranchScopeRow(db, scope: scope),
               let state = self.readBranchState(db, scope: scope),
               state.switchPendingSince == nil,
-              let claimedCount = self.selectInt(
-                  db,
-                  sql: """
-                  SELECT COUNT(*) FROM outbox_commands
-                  WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
-                    AND status IN ('sending', 'awaiting_confirmation')
-                  """,
-                  bindings: self.scopeBindings(scope)),
-              claimedCount == 0,
+              self.unconfirmedCommandCount(db, scope: scope) == 0,
               self.execute(
                   db,
                   sql: """
@@ -967,6 +952,20 @@ extension OpenClawChatSQLiteTranscriptCache {
 
     private func scopeBindings(_ scope: OpenClawChatOutboxScope) -> [Any] {
         [self.gatewayID, scope.sessionKey, Self.normalizedAgentID(scope.agentID)]
+    }
+
+    private func unconfirmedCommandCount(
+        _ db: OpaquePointer,
+        scope: OpenClawChatOutboxScope) -> Int?
+    {
+        self.selectInt(
+            db,
+            sql: """
+            SELECT COUNT(*) FROM outbox_commands
+            WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
+              AND status IN ('queued', 'sending', 'awaiting_confirmation')
+            """,
+            bindings: self.scopeBindings(scope))
     }
 
     private func ensureBranchScopeRow(_ db: OpaquePointer, scope: OpenClawChatOutboxScope) -> Bool {

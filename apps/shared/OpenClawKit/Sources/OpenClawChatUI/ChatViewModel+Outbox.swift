@@ -80,14 +80,14 @@ extension OpenClawChatViewModel {
         self.outbox != nil && (!self.hasRestoredOutboxMessages || !self.outboxStatesByMessageID.isEmpty)
     }
 
-    func beginOutboxBranchSwitch(_ session: SessionSnapshot) async -> Bool {
+    func beginOutboxSessionMutation(_ session: SessionSnapshot) async -> Bool {
         guard let outbox else { return true }
         guard let scope = self.outboxBranchScope(for: session) else { return false }
         await self.pendingCacheWriteTask?.value
         return await outbox.beginBranchSwitch(scope)
     }
 
-    func cancelOutboxBranchSwitch(_ session: SessionSnapshot) async {
+    func cancelOutboxSessionMutation(_ session: SessionSnapshot) async {
         guard let outbox, let scope = self.outboxBranchScope(for: session) else { return }
         _ = await outbox.cancelBranchSwitch(scope)
     }

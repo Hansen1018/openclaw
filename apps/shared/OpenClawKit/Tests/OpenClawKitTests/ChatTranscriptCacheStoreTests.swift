@@ -1411,13 +1411,13 @@ struct ChatCommandOutboxStoreTests {
         let switchStore = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         let siblingStore = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
+
+        #expect(await switchStore.beginBranchSwitch(scope))
         #expect(await switchStore.enqueueCommand(outboxCommand(
             id: "blocked",
             sessionKey: "main",
             agentID: "agent-a",
             text: "wait for switch")))
-
-        #expect(await switchStore.beginBranchSwitch(scope))
         #expect(await siblingStore.claimNextCommand() == nil)
         #expect(await switchStore.cancelBranchSwitch(scope))
         #expect(await siblingStore.claimNextCommand()?.id == "blocked")

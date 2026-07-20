@@ -1615,7 +1615,10 @@ struct ChatViewModelOutboxTests {
         }
 
         try await waitUntil("both agent scopes reconcile") {
-            await transport.state.branchListRequests.count >= 2
+            await MainActor.run {
+                vm.reconciledOutboxBranchScopes.contains(alphaScope) &&
+                    vm.reconciledOutboxBranchScopes.contains(betaScope)
+            }
         }
         let requests = await transport.state.branchListRequests
         #expect(Set(requests.map { "\($0.sessionKey)|\($0.agentID ?? "")" }) == [

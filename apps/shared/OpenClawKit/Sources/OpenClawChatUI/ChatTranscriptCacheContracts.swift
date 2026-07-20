@@ -280,8 +280,8 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
     /// Captures the persisted scope state before bootstrap history can advance its tip.
     func branchState(for scope: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState?
-    /// Installs the cross-view-model switch barrier only when no delivery is
-    /// already unresolved for the scope.
+    /// Installs the cross-view-model transcript-mutation barrier only when no
+    /// delivery is already unresolved for the scope.
     func beginBranchSwitch(_ scope: OpenClawChatOutboxScope) async -> Bool
     /// Rolls back a barrier when the server rejected the switch.
     func cancelBranchSwitch(_ scope: OpenClawChatOutboxScope) async -> Bool

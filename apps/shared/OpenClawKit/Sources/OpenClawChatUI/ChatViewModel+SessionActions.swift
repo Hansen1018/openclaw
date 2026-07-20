@@ -373,8 +373,13 @@ extension OpenClawChatViewModel {
 
     public func rewindToMessage(_ message: OpenClawChatMessage) async {
         guard let entryID = Self.sessionMutationEntryID(for: message) else { return }
-        guard !self.hasBlockingRunActivity, !self.isSending, !self.isAborting else { return }
+        guard self.canPerformMessageSessionAction else { return }
         let initiatingSession = self.currentSessionSnapshot()
+        guard await self.beginOutboxSessionMutation(initiatingSession) else { return }
+        guard self.isCurrentSession(initiatingSession) else {
+            await self.cancelOutboxSessionMutation(initiatingSession)
+            return
+        }
         do {
             let result = try await self.transport.rewindSession(
                 sessionKey: initiatingSession.key,
@@ -387,8 +392,9 @@ extension OpenClawChatViewModel {
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
             guard self.isCurrentSession(initiatingSession) else { return }
-            await self.refreshSessionBranches()
+            await self.refreshSessionBranches(confirmingBranchChange: true)
         } catch {
+            await self.cancelOutboxSessionMutation(initiatingSession)
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.rewind failed \(error.localizedDescription, privacy: .public)")
@@ -494,6 +500,13 @@ extension OpenClawChatViewModel {
             !self.hasUnresolvedOutboxCommandsForCurrentSession
     }
 
+    var canPerformMessageSessionAction: Bool {
+        !self.hasBlockingRunActivity &&
+            !self.isSending &&
+            !self.isAborting &&
+            !self.hasPendingOutboxCommandsForCurrentSession
+    }
+
     public func switchToBranch(_ leafEntryId: String) async {
         let normalizedLeafEntryID = leafEntryId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedLeafEntryID.isEmpty else { return }
@@ -504,11 +517,11 @@ extension OpenClawChatViewModel {
         let initiatingSession = self.currentSessionSnapshot()
         let switchActivity = self.beginSessionBranchSwitchActivity(for: initiatingSession)
         defer { self.endSessionBranchSwitchActivity(switchActivity) }
-        guard await self.beginOutboxBranchSwitch(initiatingSession) else {
+        guard await self.beginOutboxSessionMutation(initiatingSession) else {
             return
         }
         guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else {
-            await self.cancelOutboxBranchSwitch(initiatingSession)
+            await self.cancelOutboxSessionMutation(initiatingSession)
             return
         }
         do {
@@ -528,7 +541,7 @@ extension OpenClawChatViewModel {
                 switchActivity,
                 confirmedLeafEntryID: normalizedLeafEntryID)
         } catch {
-            await self.cancelOutboxBranchSwitch(initiatingSession)
+            await self.cancelOutboxSessionMutation(initiatingSession)
             guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
@@ -541,13 +554,21 @@ extension OpenClawChatViewModel {
     /// which does not expose fork/rewind and would widen the lease API for no sibling.
     public func forkAtMessage(_ message: OpenClawChatMessage) async {
         guard let entryID = Self.sessionMutationEntryID(for: message) else { return }
-        guard !self.hasBlockingRunActivity, !self.isSending, !self.isAborting else { return }
+        guard self.canPerformMessageSessionAction else { return }
         guard self.canCreateSessionForImmediateSwitch() else { return }
         let initiatingSession = self.currentSessionSnapshot()
+        guard await self.beginOutboxSessionMutation(initiatingSession) else { return }
+        guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {
+            await self.cancelOutboxSessionMutation(initiatingSession)
+            return
+        }
         do {
             let result = try await self.transport.forkSessionAtMessage(
                 sessionKey: initiatingSession.key,
                 entryId: entryID)
+            // Fork leaves the source transcript unchanged, so its lease is only an entry gate.
+            // Rewind repoints the source scope and confirms an epoch change instead.
+            await self.cancelOutboxSessionMutation(initiatingSession)
             let createdKey = result.sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !createdKey.isEmpty else { return }
             guard self.isCurrentSession(initiatingSession),
@@ -563,6 +584,7 @@ extension OpenClawChatViewModel {
             guard self.sessionKey == createdKey else { return }
             self.input = result.editorText ?? ""
         } catch {
+            await self.cancelOutboxSessionMutation(initiatingSession)
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.fork failed \(error.localizedDescription, privacy: .public)")
