@@ -1457,7 +1457,37 @@ struct ChatCommandOutboxStoreTests {
         #expect(await store.branchState(for: scope)?.switchPendingSince == nil)
     }
 
-    @Test func `retry after accepted branch parking mints identity but queued parking keeps it`() async throws {
+    @Test func `branch observation preserves evidence until queued work reconciles`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "from-leaf-a",
+            sessionKey: "main",
+            agentID: "agent-a",
+            text: "do not move to B")))
+
+        #expect(await !store.updateLastActiveLeafEntryID("leaf-b", expectedEpoch: 0, for: scope))
+        let previousState = try #require(await store.branchState(for: scope))
+        #expect(previousState.lastActiveLeafEntryID == "leaf-a")
+        let reconciled = try #require(await store.reconcileBranchScope(
+            scope,
+            previousState: previousState,
+            activeLeafEntryID: "leaf-b",
+            branchLeafEntryIDs: ["leaf-a", "leaf-b"],
+            lastError: "branch changed"))
+        #expect(reconciled.first(where: { $0.id == "from-leaf-a" })?.status == .failed)
+        #expect(await store.branchState(for: scope)?.lastActiveLeafEntryID == "leaf-b")
+
+        #expect(await store.beginBranchSwitch(scope))
+        #expect(await !store.updateLastActiveLeafEntryID("leaf-c", expectedEpoch: 1, for: scope))
+        #expect(await store.branchState(for: scope)?.lastActiveLeafEntryID == "leaf-b")
+        #expect(await store.cancelBranchSwitch(scope))
+    }
+
+    @Test func `retry after accepted or sending parking mints identity but queued keeps it`() async throws {
         let url = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
@@ -1476,7 +1506,39 @@ struct ChatCommandOutboxStoreTests {
             acceptedScope,
             activeLeafEntryID: "leaf-b",
             lastError: "branch changed"))
-        let acceptedParked = try #require(await store.loadCommands().first)
+
+        let sendingScope = OpenClawChatOutboxScope(sessionKey: "sending", agentID: "agent-a")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: sendingScope))
+        let sendingPreviousState = try #require(await store.branchState(for: sendingScope))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "sending-id",
+            sessionKey: "sending",
+            agentID: "agent-a",
+            text: "ack may be delayed")))
+        #expect(await store.claimNextCommand()?.id == "sending-id")
+        _ = try #require(await store.reconcileBranchScope(
+            sendingScope,
+            previousState: sendingPreviousState,
+            activeLeafEntryID: "leaf-b",
+            branchLeafEntryIDs: ["leaf-b"],
+            lastError: "branch changed"))
+
+        let queuedScope = OpenClawChatOutboxScope(sessionKey: "queued", agentID: "agent-a")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: queuedScope))
+        let queuedPreviousState = try #require(await store.branchState(for: queuedScope))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "queued-id",
+            sessionKey: "queued",
+            agentID: "agent-a",
+            text: "not dispatched")))
+        _ = try #require(await store.reconcileBranchScope(
+            queuedScope,
+            previousState: queuedPreviousState,
+            activeLeafEntryID: "leaf-b",
+            branchLeafEntryIDs: ["leaf-b"],
+            lastError: "branch changed"))
+
+        let acceptedParked = try #require(await store.loadCommands().first(where: { $0.id == "accepted-id" }))
         #expect(await store.markCommandRetriedIfPresent(
             id: acceptedParked.id,
             expectedAttemptVersion: acceptedParked.attemptVersion,
@@ -1486,21 +1548,24 @@ struct ChatCommandOutboxStoreTests {
             deliverySessionKey: "accepted",
             routingContract: "per-sender|accepted|agent-a",
             replacementID: "accepted-retry-id") == .updated)
-        let acceptedRetry = try #require(await store.loadCommands().first)
-        #expect(acceptedRetry.id == "accepted-retry-id")
+        let acceptedRetry = try #require(await store.loadCommands().first(where: {
+            $0.id == "accepted-retry-id"
+        }))
         #expect(acceptedRetry.attemptVersion == 1)
 
-        #expect(await store.enqueueCommand(outboxCommand(
-            id: "queued-id",
-            sessionKey: "queued",
+        let sendingParked = try #require(await store.loadCommands().first(where: { $0.id == "sending-id" }))
+        #expect(await store.markCommandRetriedIfPresent(
+            id: sendingParked.id,
+            expectedAttemptVersion: sendingParked.attemptVersion,
+            expectedRetryCount: sendingParked.retryCount,
+            expectedLastError: sendingParked.lastError,
             agentID: "agent-a",
-            text: "not dispatched")))
-        let queuedScope = OpenClawChatOutboxScope(sessionKey: "queued", agentID: "agent-a")
-        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: queuedScope))
-        _ = try #require(await store.confirmBranchChange(
-            queuedScope,
-            activeLeafEntryID: "leaf-b",
-            lastError: "branch changed"))
+            deliverySessionKey: "sending",
+            routingContract: "per-sender|sending|agent-a",
+            replacementID: "sending-retry-id") == .updated)
+        let sendingRetry = try #require(await store.loadCommands().first(where: { $0.id == "sending-retry-id" }))
+        #expect(sendingRetry.attemptVersion == 1)
+
         let queuedParked = try #require(await store.loadCommands().first(where: { $0.id == "queued-id" }))
         #expect(await store.markCommandRetriedIfPresent(
             id: queuedParked.id,
@@ -1513,6 +1578,31 @@ struct ChatCommandOutboxStoreTests {
             replacementID: "unused-replacement") == .updated)
         let queuedRetry = try #require(await store.loadCommands().first(where: { $0.id == "queued-id" }))
         #expect(queuedRetry.attemptVersion == queuedParked.attemptVersion + 1)
+    }
+
+    @Test func `enqueue after branch snapshot is parked by transactional pending check`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        let previousState = try #require(await store.branchState(for: scope))
+        #expect(!previousState.hadPendingCommands)
+
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "racing-enqueue",
+            sessionKey: "main",
+            agentID: "agent-a",
+            text: "arrived after capture")))
+        let reconciled = try #require(await store.reconcileBranchScope(
+            scope,
+            previousState: previousState,
+            activeLeafEntryID: "leaf-b",
+            branchLeafEntryIDs: ["leaf-b"],
+            lastError: "branch changed"))
+
+        #expect(reconciled.first(where: { $0.id == "racing-enqueue" })?.status == .failed)
+        #expect(await store.branchState(for: scope)?.lastActiveLeafEntryID == "leaf-b")
     }
 
     @Test func `confirming the same branch twice is an epoch no-op`() async throws {
@@ -1666,7 +1756,8 @@ struct ChatCommandOutboxStoreTests {
             deliverySessionKey: "main",
             routingContract: "per-sender|main|agent-a") == .updated)
         let newAttempt = try #require(await store.claimNextCommand())
-        #expect(newAttempt.attemptVersion == oldAttempt.attemptVersion + 1)
+        #expect(newAttempt.id != oldAttempt.id)
+        #expect(newAttempt.attemptVersion == 1)
 
         #expect(await store.markCommandFailedIfPresent(
             id: oldAttempt.id,

@@ -842,7 +842,8 @@ extension OpenClawChatSQLiteTranscriptCache {
               state.epoch == previousState.epoch
         else { return nil }
         guard self.clearExpiredBranchSwitches(db, scope: scope),
-              let refreshedState = self.readBranchState(db, scope: scope)
+              let refreshedState = self.readBranchState(db, scope: scope),
+              let currentUnconfirmedCommandCount = self.unconfirmedCommandCount(db, scope: scope)
         else { return nil }
         state = refreshedState
         guard state.switchPendingSince == nil else { return nil }
@@ -862,7 +863,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             invalidatesOutbox = true
         } else {
             if previousState.lastActiveLeafEntryID != activeLeafEntryID,
-               previousState.hadPendingCommands || activeLeafEntryID == nil
+               currentUnconfirmedCommandCount > 0 || activeLeafEntryID == nil
             {
                 // A crash after a transcript append can make the tip ambiguous.
                 // Requiring one manual retry is preferable to silent wrong-branch delivery.
@@ -941,6 +942,12 @@ extension OpenClawChatSQLiteTranscriptCache {
             UPDATE outbox_branch_scopes SET last_active_leaf_id = ?4
             WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
               AND branch_epoch = ?5
+              AND switch_pending_since IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM outbox_commands c
+                  WHERE c.gateway_id = ?1 AND c.session_key = ?2 AND c.agent_id = ?3
+                    AND c.status IN ('queued', 'sending', 'awaiting_confirmation')
+              )
             """,
             bindings: self.scopeBindings(scope) + [leafEntryID, expectedEpoch]) &&
             sqlite3_changes(db) > 0
@@ -1083,7 +1090,8 @@ extension OpenClawChatSQLiteTranscriptCache {
             sql: """
             UPDATE outbox_commands
             SET parked_was_accepted = CASE
-                    WHEN status = 'awaiting_confirmation' THEN 1 ELSE parked_was_accepted END,
+                    WHEN status IN ('sending', 'awaiting_confirmation') THEN 1
+                    ELSE parked_was_accepted END,
                 status = 'failed', last_error = ?4
             WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
               AND branch_epoch <> ?5
@@ -1103,7 +1111,8 @@ extension OpenClawChatSQLiteTranscriptCache {
             sql: """
             UPDATE outbox_commands
             SET parked_was_accepted = CASE
-                    WHEN status = 'awaiting_confirmation' THEN 1 ELSE parked_was_accepted END,
+                    WHEN status IN ('sending', 'awaiting_confirmation') THEN 1
+                    ELSE parked_was_accepted END,
                 status = 'failed', last_error = ?4
             WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
               AND status IN ('queued', 'sending', 'awaiting_confirmation')
@@ -1208,7 +1217,7 @@ extension OpenClawChatSQLiteTranscriptCache {
         let retrySQL: String
         if mintsNewIdentity {
             // User-initiated retry after a branch switch is a new delivery decision.
-            // The accepted old-branch copy may exist, so never reuse its idempotency identity.
+            // The accepted or in-flight old-branch copy may exist, so mint a new identity.
             retrySQL = """
             UPDATE outbox_commands
             SET client_uuid = ?8, status = 'queued', attempt_version = 1,
