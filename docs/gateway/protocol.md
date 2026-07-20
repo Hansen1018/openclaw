@@ -547,7 +547,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Agent and workspace helpers">
-    - `agents.entries` returns configured agent entries, including effective model and runtime metadata.
+    - `agents.list` returns configured agent entries, including effective model and runtime metadata.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.list` remains the compatibility-safe run/tool RPC.
