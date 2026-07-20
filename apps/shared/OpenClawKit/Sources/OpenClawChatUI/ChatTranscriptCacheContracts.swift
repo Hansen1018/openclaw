@@ -97,17 +97,20 @@ public struct OpenClawChatOutboxBranchState: Equatable, Sendable {
     public let lastActiveLeafEntryID: String?
     public let hadPendingCommands: Bool
     public let switchPendingSince: TimeInterval?
+    public let needsReconciliation: Bool
 
     public init(
         epoch: Int,
         lastActiveLeafEntryID: String?,
         hadPendingCommands: Bool = false,
-        switchPendingSince: TimeInterval? = nil)
+        switchPendingSince: TimeInterval? = nil,
+        needsReconciliation: Bool = false)
     {
         self.epoch = epoch
         self.lastActiveLeafEntryID = lastActiveLeafEntryID
         self.hadPendingCommands = hadPendingCommands
         self.switchPendingSince = switchPendingSince
+        self.needsReconciliation = needsReconciliation
     }
 }
 

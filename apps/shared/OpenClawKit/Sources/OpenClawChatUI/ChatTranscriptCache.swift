@@ -167,6 +167,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         branch_epoch INTEGER NOT NULL DEFAULT 0,
         last_active_leaf_id TEXT,
         switch_pending_since REAL,
+        needs_reconciliation INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY(gateway_id, session_key, agent_id)
     )
     """
@@ -619,13 +620,19 @@ extension OpenClawChatSQLiteTranscriptCache {
         guard !self.isRetired, let db = await handle() else { return nil }
         guard self.execute(db, sql: "BEGIN IMMEDIATE", bindings: []) else { return nil }
         var committed = false
+        var invalidatedScopes: [OpenClawChatOutboxScope] = []
         defer {
             if !committed {
                 _ = self.execute(db, sql: "ROLLBACK", bindings: [])
+            } else {
+                for scope in invalidatedScopes {
+                    self.emitOutboxChange(.invalidated(scope: scope))
+                }
             }
         }
         guard self.applyOutboxStaleness(db) else { return nil }
-        guard self.clearExpiredBranchSwitches(db) else { return nil }
+        guard let expiredScopes = self.expireBranchSwitchLeases(db) else { return nil }
+        invalidatedScopes = expiredScopes
         guard let activeClaimCount = selectInt(
             db,
             sql: "SELECT COUNT(*) FROM outbox_commands WHERE gateway_id = ?1 AND status = 'sending'",
@@ -645,6 +652,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 AND s.agent_id = c.agent_id
             WHERE c.gateway_id = ?1 AND c.status = 'queued'
               AND s.switch_pending_since IS NULL
+              AND COALESCE(s.needs_reconciliation, 0) = 0
             ORDER BY c.created_at ASC, c.id ASC LIMIT 1
             """,
             bindings: [self.gatewayID]),
@@ -760,7 +768,8 @@ extension OpenClawChatSQLiteTranscriptCache {
             epoch: state.epoch,
             lastActiveLeafEntryID: state.lastActiveLeafEntryID,
             hadPendingCommands: pendingCount > 0,
-            switchPendingSince: state.switchPendingSince)
+            switchPendingSince: state.switchPendingSince,
+            needsReconciliation: state.needsReconciliation)
     }
 
     public func beginBranchSwitch(_ scope: OpenClawChatOutboxScope) async -> Bool {
@@ -773,9 +782,20 @@ extension OpenClawChatSQLiteTranscriptCache {
             if !committed { _ = self.execute(db, sql: "ROLLBACK", bindings: []) }
         }
         guard self.ensureBranchScopeRow(db, scope: scope),
-              self.clearExpiredBranchSwitches(db, scope: scope),
-              let state = self.readBranchState(db, scope: scope),
+              let expiredScopes = self.expireBranchSwitchLeases(db, scope: scope)
+        else { return false }
+        if !expiredScopes.isEmpty {
+            committed = self.execute(db, sql: "COMMIT", bindings: [])
+            if committed {
+                for scope in expiredScopes {
+                    self.emitOutboxChange(.invalidated(scope: scope))
+                }
+            }
+            return false
+        }
+        guard let state = self.readBranchState(db, scope: scope),
               state.switchPendingSince == nil,
+              !state.needsReconciliation,
               self.unconfirmedCommandCount(db, scope: scope) == 0,
               self.execute(
                   db,
@@ -841,13 +861,16 @@ extension OpenClawChatSQLiteTranscriptCache {
               var state = self.readBranchState(db, scope: scope),
               state.epoch == previousState.epoch
         else { return nil }
-        guard self.clearExpiredBranchSwitches(db, scope: scope),
+        guard self.expireBranchSwitchLeases(db, scope: scope) != nil,
               let refreshedState = self.readBranchState(db, scope: scope),
               let currentUnconfirmedCommandCount = self.unconfirmedCommandCount(db, scope: scope)
         else { return nil }
         state = refreshedState
         guard state.switchPendingSince == nil else { return nil }
 
+        // A cross-client switch can win after this reconciliation but before send reaches the gateway.
+        // Sends, like the web client, carry no branch precondition and land on the active branch at arrival.
+        // Close this only with a protocol-level expectedActiveLeaf precondition.
         if let activeLeafEntryID,
            let lastLeaf = previousState.lastActiveLeafEntryID,
            lastLeaf != activeLeafEntryID,
@@ -943,6 +966,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
               AND branch_epoch = ?5
               AND switch_pending_since IS NULL
+              AND needs_reconciliation = 0
               AND NOT EXISTS (
                   SELECT 1 FROM outbox_commands c
                   WHERE c.gateway_id = ?1 AND c.session_key = ?2 AND c.agent_id = ?3
@@ -976,28 +1000,58 @@ extension OpenClawChatSQLiteTranscriptCache {
             bindings: self.scopeBindings(scope))
     }
 
-    private func clearExpiredBranchSwitches(
+    private func expireBranchSwitchLeases(
         _ db: OpaquePointer,
-        scope: OpenClawChatOutboxScope? = nil) -> Bool
+        scope: OpenClawChatOutboxScope? = nil) -> [OpenClawChatOutboxScope]?
     {
         let cutoff = Date().timeIntervalSince1970 - Self.outboxBranchSwitchLeaseMaxAge
         if let scope {
-            return self.execute(
+            guard self.execute(
                 db,
                 sql: """
-                UPDATE outbox_branch_scopes SET switch_pending_since = NULL
+                UPDATE outbox_branch_scopes
+                SET switch_pending_since = NULL, needs_reconciliation = 1
                 WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
                   AND switch_pending_since <= ?4
                 """,
                 bindings: self.scopeBindings(scope) + [cutoff])
+            else { return nil }
+            return sqlite3_changes(db) > 0 ? [scope] : []
         }
-        return self.execute(
-            db,
-            sql: """
-            UPDATE outbox_branch_scopes SET switch_pending_since = NULL
-            WHERE gateway_id = ?1 AND switch_pending_since <= ?2
-            """,
-            bindings: [self.gatewayID, cutoff])
+        guard let scopes = self.selectExpiredBranchSwitchScopes(db, cutoff: cutoff),
+              self.execute(
+                  db,
+                  sql: """
+                  UPDATE outbox_branch_scopes
+                  SET switch_pending_since = NULL, needs_reconciliation = 1
+                  WHERE gateway_id = ?1 AND switch_pending_since <= ?2
+                  """,
+                  bindings: [self.gatewayID, cutoff])
+        else { return nil }
+        return scopes
+    }
+
+    private func selectExpiredBranchSwitchScopes(
+        _ db: OpaquePointer,
+        cutoff: TimeInterval) -> [OpenClawChatOutboxScope]?
+    {
+        var statement: OpaquePointer?
+        let sql = """
+        SELECT session_key, agent_id FROM outbox_branch_scopes
+        WHERE gateway_id = ?1 AND switch_pending_since <= ?2
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(statement) }
+        guard self.bind(statement, bindings: [self.gatewayID, cutoff]) else { return nil }
+        var scopes: [OpenClawChatOutboxScope] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let sessionKey = sqlite3_column_text(statement, 0) else { return nil }
+            let agentID = sqlite3_column_text(statement, 1).map { String(cString: $0) }
+            scopes.append(OpenClawChatOutboxScope(
+                sessionKey: String(cString: sessionKey),
+                agentID: agentID))
+        }
+        return scopes
     }
 
     private func ensureBranchScopeRow(_ db: OpaquePointer, scope: OpenClawChatOutboxScope) -> Bool {
@@ -1005,8 +1059,8 @@ extension OpenClawChatSQLiteTranscriptCache {
             db,
             sql: """
             INSERT OR IGNORE INTO outbox_branch_scopes(
-                gateway_id, session_key, agent_id, branch_epoch, last_active_leaf_id
-            ) VALUES (?1, ?2, ?3, 0, NULL)
+                gateway_id, session_key, agent_id, branch_epoch, last_active_leaf_id, needs_reconciliation
+            ) VALUES (?1, ?2, ?3, 0, NULL, 0)
             """,
             bindings: self.scopeBindings(scope))
     }
@@ -1017,7 +1071,8 @@ extension OpenClawChatSQLiteTranscriptCache {
     {
         var statement: OpaquePointer?
         let sql = """
-        SELECT branch_epoch, last_active_leaf_id, switch_pending_since FROM outbox_branch_scopes
+        SELECT branch_epoch, last_active_leaf_id, switch_pending_since, needs_reconciliation
+        FROM outbox_branch_scopes
         WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
         """
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
@@ -1030,14 +1085,16 @@ extension OpenClawChatSQLiteTranscriptCache {
             lastActiveLeafEntryID: sqlite3_column_text(statement, 1).map { String(cString: $0) },
             switchPendingSince: sqlite3_column_type(statement, 2) == SQLITE_NULL
                 ? nil
-                : sqlite3_column_double(statement, 2))
+                : sqlite3_column_double(statement, 2),
+            needsReconciliation: sqlite3_column_int(statement, 3) != 0)
     }
 
     private func clearBranchSwitch(_ db: OpaquePointer, scope: OpenClawChatOutboxScope) -> Bool {
         self.execute(
             db,
             sql: """
-            UPDATE outbox_branch_scopes SET switch_pending_since = NULL
+            UPDATE outbox_branch_scopes
+            SET switch_pending_since = NULL, needs_reconciliation = 0
             WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
             """,
             bindings: self.scopeBindings(scope))
@@ -1053,7 +1110,8 @@ extension OpenClawChatSQLiteTranscriptCache {
             return self.execute(
                 db,
                 sql: """
-                UPDATE outbox_branch_scopes SET branch_epoch = ?4, last_active_leaf_id = NULL
+                UPDATE outbox_branch_scopes
+                SET branch_epoch = ?4, last_active_leaf_id = NULL, needs_reconciliation = 0
                 WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
                 """,
                 bindings: self.scopeBindings(scope) + [epoch])
@@ -1061,7 +1119,8 @@ extension OpenClawChatSQLiteTranscriptCache {
         return self.execute(
             db,
             sql: """
-            UPDATE outbox_branch_scopes SET branch_epoch = ?4, last_active_leaf_id = ?5
+            UPDATE outbox_branch_scopes
+            SET branch_epoch = ?4, last_active_leaf_id = ?5, needs_reconciliation = 0
             WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
             """,
             bindings: self.scopeBindings(scope) + [epoch, lastActiveLeafEntryID])
@@ -1079,7 +1138,8 @@ extension OpenClawChatSQLiteTranscriptCache {
             db,
             sql: """
             UPDATE outbox_branch_scopes
-            SET branch_epoch = ?4, last_active_leaf_id = ?5, switch_pending_since = NULL
+            SET branch_epoch = ?4, last_active_leaf_id = ?5,
+                switch_pending_since = NULL, needs_reconciliation = 0
             WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
             """,
             bindings: self.scopeBindings(scope) + [nextEpoch, activeLeafEntryID])
@@ -1695,7 +1755,8 @@ extension OpenClawChatSQLiteTranscriptCache {
               self.ensureOutboxBranchEpochColumn(opened),
               self.ensureOutboxParkedWasAcceptedColumn(opened),
               sqlite3_exec(opened, Self.createOutboxBranchScopeTableSQL, nil, nil, nil) == SQLITE_OK,
-              self.ensureOutboxSwitchPendingSinceColumn(opened)
+              self.ensureOutboxSwitchPendingSinceColumn(opened),
+              self.ensureOutboxNeedsReconciliationColumn(opened)
         else {
             sqlite3_close_v2(opened)
             return nil
@@ -1967,6 +2028,22 @@ extension OpenClawChatSQLiteTranscriptCache {
             return true
         }
         return self.table(db, hasColumn: "switch_pending_since", tableName: "outbox_branch_scopes")
+    }
+
+    private func ensureOutboxNeedsReconciliationColumn(_ db: OpaquePointer) -> Bool {
+        if self.table(db, hasColumn: "needs_reconciliation", tableName: "outbox_branch_scopes") {
+            return true
+        }
+        if sqlite3_exec(
+            db,
+            "ALTER TABLE outbox_branch_scopes ADD COLUMN needs_reconciliation INTEGER NOT NULL DEFAULT 0",
+            nil,
+            nil,
+            nil) == SQLITE_OK
+        {
+            return true
+        }
+        return self.table(db, hasColumn: "needs_reconciliation", tableName: "outbox_branch_scopes")
     }
 
     private func migrateTranscriptTableToV3(_ db: OpaquePointer) -> Bool {

@@ -1463,6 +1463,15 @@ extension OpenClawChatViewModel {
             let session = self.currentSessionSnapshot()
             guard self.outboxBranchScope(for: session) == scope else { return }
             self.restoreOutboxMessages(session: session)
+            guard let outbox = self.outbox else { return }
+            Task { [weak self] in
+                guard let self,
+                      await outbox.branchState(for: scope)?.needsReconciliation == true,
+                      self.outboxBranchScope(for: self.currentSessionSnapshot()) == scope
+                else { return }
+                self.reconciledOutboxBranchScopes.remove(scope)
+                self.restoreOutboxMessages(session: self.currentSessionSnapshot())
+            }
         }
     }
 

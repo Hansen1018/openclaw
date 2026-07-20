@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import SQLite3
 import Testing
 @testable import OpenClawChatUI
 
@@ -1466,6 +1467,53 @@ struct ChatViewModelOutboxTests {
         try await waitUntil("sibling consumes the batch invalidation") {
             await MainActor.run {
                 siblingVM.outboxStatesByMessageID.values.contains { $0.isFailed }
+            }
+        }
+    }
+
+    @Test func `expired branch lease invalidation makes a sibling reconcile again`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        let transport = OutboxTestTransport(healthy: false, activeBranchLeafEntryID: "leaf-a")
+        let initiatingVM = await makeOutboxViewModel(transport: transport, outbox: store)
+        let siblingVM = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run {
+            initiatingVM.reconciledOutboxBranchScopes.insert(scope)
+            siblingVM.reconciledOutboxBranchScopes.insert(scope)
+        }
+        #expect(await store.beginBranchSwitch(scope))
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "expired-lease-row",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "wait for reconciliation",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        let expired = Date().timeIntervalSince1970 -
+            OpenClawChatSQLiteTranscriptCache.outboxBranchSwitchLeaseMaxAge - 1
+        #expect(sqlite3_exec(
+            raw,
+            "UPDATE outbox_branch_scopes SET switch_pending_since = \(expired)",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
+        sqlite3_close(raw)
+
+        #expect(await store.claimNextCommand() == nil)
+        try await waitUntil("sibling observes the reconciliation invalidation") {
+            await MainActor.run {
+                !siblingVM.reconciledOutboxBranchScopes.contains(scope)
             }
         }
     }

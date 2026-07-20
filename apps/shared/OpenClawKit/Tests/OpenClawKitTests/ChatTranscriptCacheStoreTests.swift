@@ -1424,11 +1424,12 @@ struct ChatCommandOutboxStoreTests {
         #expect(await !switchStore.beginBranchSwitch(scope))
     }
 
-    @Test func `expired branch switch lease is reclaimed by claim`() async throws {
+    @Test func `expired branch switch lease blocks claims until matching reconciliation`() async throws {
         let url = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
         #expect(await store.beginBranchSwitch(scope))
         #expect(await store.enqueueCommand(outboxCommand(
             id: "after-crash",
@@ -1453,8 +1454,82 @@ struct ChatCommandOutboxStoreTests {
         sqlite3_finalize(statement)
         sqlite3_close(raw)
 
+        #expect(await store.claimNextCommand() == nil)
+        let expiredState = try #require(await store.branchState(for: scope))
+        #expect(expiredState.switchPendingSince == nil)
+        #expect(expiredState.needsReconciliation)
+        _ = try #require(await store.reconcileBranchScope(
+            scope,
+            previousState: expiredState,
+            activeLeafEntryID: "leaf-a",
+            branchLeafEntryIDs: ["leaf-a"],
+            lastError: "branch changed"))
+        #expect(await store.branchState(for: scope)?.needsReconciliation == false)
         #expect(await store.claimNextCommand()?.id == "after-crash")
-        #expect(await store.branchState(for: scope)?.switchPendingSince == nil)
+    }
+
+    @Test func `expired branch switch lease parks rows after changed-leaf reconciliation`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        #expect(await store.beginBranchSwitch(scope))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "old-branch-row",
+            sessionKey: "main",
+            agentID: "agent-a",
+            text: "park after expiry")))
+
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        let expired = Date().timeIntervalSince1970 -
+            OpenClawChatSQLiteTranscriptCache.outboxBranchSwitchLeaseMaxAge - 1
+        var statement: OpaquePointer?
+        #expect(sqlite3_prepare_v2(
+            raw,
+            "UPDATE outbox_branch_scopes SET switch_pending_since = ?1",
+            -1,
+            &statement,
+            nil) == SQLITE_OK)
+        sqlite3_bind_double(statement, 1, expired)
+        #expect(sqlite3_step(statement) == SQLITE_DONE)
+        sqlite3_finalize(statement)
+        sqlite3_close(raw)
+
+        #expect(await store.claimNextCommand() == nil)
+        let expiredState = try #require(await store.branchState(for: scope))
+        _ = try #require(await store.reconcileBranchScope(
+            scope,
+            previousState: expiredState,
+            activeLeafEntryID: "leaf-b",
+            branchLeafEntryIDs: ["leaf-a", "leaf-b"],
+            lastError: "branch changed"))
+        #expect(await store.branchState(for: scope)?.needsReconciliation == false)
+        #expect(await store.loadCommands().first?.status == .failed)
+    }
+
+    @Test func `expired branch switch lease blocks a new mutation lease until reconciliation`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
+        #expect(await store.beginBranchSwitch(scope))
+
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        let expired = Date().timeIntervalSince1970 -
+            OpenClawChatSQLiteTranscriptCache.outboxBranchSwitchLeaseMaxAge - 1
+        #expect(sqlite3_exec(
+            raw,
+            "UPDATE outbox_branch_scopes SET switch_pending_since = \(expired)",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
+        sqlite3_close(raw)
+
+        #expect(await !store.beginBranchSwitch(scope))
+        #expect(await store.branchState(for: scope)?.needsReconciliation == true)
     }
 
     @Test func `branch observation preserves evidence until queued work reconciles`() async throws {
