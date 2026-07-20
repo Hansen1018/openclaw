@@ -33,12 +33,7 @@ export function renderSessionRowBadges(params: {
   const conflictPlacementState = workspaceConflictCount > 0 ? params.placementState : undefined;
   const displayedPlacementState = cloudPlacementState ?? conflictPlacementState;
   const hasWorkspaceConflict = workspaceConflictCount > 0;
-  if (
-    !hasAutomation &&
-    !params.hasApproval &&
-    !displayedPlacementState &&
-    !hasWorkspaceConflict
-  ) {
+  if (!hasAutomation && !params.hasApproval && !displayedPlacementState && !hasWorkspaceConflict) {
     return nothing;
   }
   const cloudLabel = hasWorkspaceConflict
