@@ -139,6 +139,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     private let branchListFailureIndices: Set<Int>
     private let historyGates: [Int: SessionActionCompletionGate]
     private let historyFailureIndices: Set<Int>
+    private let sendSucceeds: Bool
 
     init(
         forkGate: SessionActionCompletionGate? = nil,
@@ -153,7 +154,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         branchListResponses: [[OpenClawChatSessionBranch]] = [],
         branchListFailureIndices: Set<Int> = [],
         historyGates: [Int: SessionActionCompletionGate] = [:],
-        historyFailureIndices: Set<Int> = [])
+        historyFailureIndices: Set<Int> = [],
+        sendSucceeds: Bool = false)
     {
         self.forkGate = forkGate
         self.rewindGate = rewindGate
@@ -168,6 +170,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         self.branchListFailureIndices = branchListFailureIndices
         self.historyGates = historyGates
         self.historyFailureIndices = historyFailureIndices
+        self.sendSucceeds = sendSucceeds
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -190,10 +193,13 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         sessionKey: String,
         message _: String,
         thinking _: String,
-        idempotencyKey _: String,
+        idempotencyKey: String,
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
         await self.state.recordSend(sessionKey: sessionKey)
+        if self.sendSucceeds {
+            return OpenClawChatSendResponse(runId: idempotencyKey, status: "accepted")
+        }
         throw NSError(domain: "SessionActionTransport", code: 1)
     }
 
@@ -548,7 +554,7 @@ struct ChatViewModelSessionActionTests {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)
-        #expect(await store.updateLastActiveLeafEntryID("leaf-active", for: scope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-active", expectedEpoch: 0, for: scope))
         #expect(await store.enqueueCommand(sessionActionOutboxCommand(
             id: "rewind-pending",
             text: "wait before rewind")))
@@ -609,7 +615,7 @@ struct ChatViewModelSessionActionTests {
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         let siblingStore = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)
-        #expect(await store.updateLastActiveLeafEntryID("leaf-active", for: scope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-active", expectedEpoch: 0, for: scope))
         let rewindGate = SessionActionCompletionGate()
         let transport = SessionActionTransport(
             rewindGate: rewindGate,
@@ -646,6 +652,39 @@ struct ChatViewModelSessionActionTests {
         #expect(racedCommand.status == .failed)
         #expect(OpenClawChatSQLiteTranscriptCache.outboxDisplayError(racedCommand.lastError) ==
             "Session branch changed; review and retry this message.")
+    }
+
+    @Test func `rewind list failure clears lease and later reconcile delivers`() async throws {
+        let url = try makeSessionActionOutboxURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)
+        #expect(await store.updateLastActiveLeafEntryID("leaf-active", expectedEpoch: 0, for: scope))
+        let transport = SessionActionTransport(
+            branches: self.branches(),
+            branchListFailureIndices: [0],
+            sendSucceeds: true)
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport,
+            outbox: store)
+        viewModel.hasRestoredOutboxMessages = true
+
+        await viewModel.rewindToMessage(self.userMessage(entryID: "message-42"))
+
+        #expect(await store.branchState(for: scope)?.switchPendingSince == nil)
+        #expect(viewModel.reconciledOutboxBranchScopes.contains(scope) == false)
+        #expect(await store.enqueueCommand(sessionActionOutboxCommand(
+            id: "after-rewind-list-failure",
+            text: "send after reconcile")))
+        viewModel.healthOK = true
+        viewModel.readySessionMetadataGeneration = viewModel.sessionMetadataGeneration
+        viewModel.flushOutboxIfNeeded()
+
+        #expect(await self.waitForSend(transport))
+        #expect(await transport.branchListSessionKeys() == ["main", "main"])
+        #expect(await transport.sentSessionKeys() == ["main"])
+        #expect(await store.loadCommands().map(\.status) == [.awaitingConfirmation])
     }
 
     @Test func `branch refresh populates state`() async {
@@ -689,6 +728,24 @@ struct ChatViewModelSessionActionTests {
         #expect(viewModel.sessionBranches == branches)
         #expect(viewModel.isLoadingSessionBranches == false)
         #expect(await transport.branchListSessionKeys() == ["main"])
+    }
+
+    @Test func `read only branch refresh failure preserves replay eligibility`() async throws {
+        let url = try makeSessionActionOutboxURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)
+        let transport = SessionActionTransport(branchListFailureIndices: [0])
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport,
+            outbox: store)
+        viewModel.reconciledOutboxBranchScopes.insert(scope)
+
+        await viewModel.refreshSessionBranchesForMenuPresentation()
+
+        #expect(viewModel.reconciledOutboxBranchScopes.contains(scope))
+        #expect(await store.branchState(for: scope)?.switchPendingSince == nil)
     }
 
     @Test func `newer branch refresh supersedes an older response`() async {
@@ -1086,6 +1143,21 @@ struct ChatViewModelSessionActionTests {
             if viewModel.hasRestoredOutboxMessages,
                viewModel.hasPendingOutboxCommandsForCurrentSession
             {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForSend(
+        _ transport: SessionActionTransport,
+        timeout: Duration = .seconds(15)) async -> Bool
+    {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if await transport.sentSessionKeys().isEmpty == false {
                 return true
             }
             await Task.yield()

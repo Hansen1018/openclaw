@@ -625,6 +625,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             }
         }
         guard self.applyOutboxStaleness(db) else { return nil }
+        guard self.clearExpiredBranchSwitches(db) else { return nil }
         guard let activeClaimCount = selectInt(
             db,
             sql: "SELECT COUNT(*) FROM outbox_commands WHERE gateway_id = ?1 AND status = 'sending'",
@@ -772,6 +773,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             if !committed { _ = self.execute(db, sql: "ROLLBACK", bindings: []) }
         }
         guard self.ensureBranchScopeRow(db, scope: scope),
+              self.clearExpiredBranchSwitches(db, scope: scope),
               let state = self.readBranchState(db, scope: scope),
               state.switchPendingSince == nil,
               self.unconfirmedCommandCount(db, scope: scope) == 0,
@@ -839,14 +841,10 @@ extension OpenClawChatSQLiteTranscriptCache {
               var state = self.readBranchState(db, scope: scope),
               state.epoch == previousState.epoch
         else { return nil }
-        if let pendingSince = state.switchPendingSince,
-           Date().timeIntervalSince1970 - pendingSince >= Self.outboxBranchSwitchLeaseMaxAge
-        {
-            guard self.clearBranchSwitch(db, scope: scope),
-                  let refreshedState = self.readBranchState(db, scope: scope)
-            else { return nil }
-            state = refreshedState
-        }
+        guard self.clearExpiredBranchSwitches(db, scope: scope),
+              let refreshedState = self.readBranchState(db, scope: scope)
+        else { return nil }
+        state = refreshedState
         guard state.switchPendingSince == nil else { return nil }
 
         if let activeLeafEntryID,
@@ -929,6 +927,7 @@ extension OpenClawChatSQLiteTranscriptCache {
 
     public func updateLastActiveLeafEntryID(
         _ leafEntryID: String,
+        expectedEpoch: Int,
         for scope: OpenClawChatOutboxScope) async -> Bool
     {
         guard !self.isRetired,
@@ -941,8 +940,10 @@ extension OpenClawChatSQLiteTranscriptCache {
             sql: """
             UPDATE outbox_branch_scopes SET last_active_leaf_id = ?4
             WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
+              AND branch_epoch = ?5
             """,
-            bindings: self.scopeBindings(scope) + [leafEntryID])
+            bindings: self.scopeBindings(scope) + [leafEntryID, expectedEpoch]) &&
+            sqlite3_changes(db) > 0
     }
 
     private static func normalizedLeafEntryID(_ leafEntryID: String?) -> String? {
@@ -966,6 +967,30 @@ extension OpenClawChatSQLiteTranscriptCache {
               AND status IN ('queued', 'sending', 'awaiting_confirmation')
             """,
             bindings: self.scopeBindings(scope))
+    }
+
+    private func clearExpiredBranchSwitches(
+        _ db: OpaquePointer,
+        scope: OpenClawChatOutboxScope? = nil) -> Bool
+    {
+        let cutoff = Date().timeIntervalSince1970 - Self.outboxBranchSwitchLeaseMaxAge
+        if let scope {
+            return self.execute(
+                db,
+                sql: """
+                UPDATE outbox_branch_scopes SET switch_pending_since = NULL
+                WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
+                  AND switch_pending_since <= ?4
+                """,
+                bindings: self.scopeBindings(scope) + [cutoff])
+        }
+        return self.execute(
+            db,
+            sql: """
+            UPDATE outbox_branch_scopes SET switch_pending_since = NULL
+            WHERE gateway_id = ?1 AND switch_pending_since <= ?2
+            """,
+            bindings: [self.gatewayID, cutoff])
     }
 
     private func ensureBranchScopeRow(_ db: OpaquePointer, scope: OpenClawChatOutboxScope) -> Bool {

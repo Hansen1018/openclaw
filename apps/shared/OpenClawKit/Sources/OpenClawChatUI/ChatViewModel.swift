@@ -176,7 +176,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var outboxBranchReconcileRetryTasks: [OpenClawChatOutboxScope: Task<Void, Never>] = [:]
     @ObservationIgnored
-    var outboxBranchReconcileRetryDelaysMs: [UInt64] = [250, 1000, 4000]
+    var outboxBranchReconcileRetryDelaysMs: [UInt64] = [250, 1000, 4000, 16000, 30000]
     @ObservationIgnored
     var outboxBranchConnectionGeneration: UInt64 = 0
     @ObservationIgnored
@@ -845,6 +845,11 @@ extension OpenClawChatViewModel {
             stateApplied = await self.confirmOutboxBranchChange(
                 activity.session,
                 activeLeafEntryID: confirmedLeafEntryID)
+            if !stateApplied {
+                await self.recoverOutboxAfterSessionMutationRefreshFailure(
+                    activity.session,
+                    branchingUnsupported: false)
+            }
         } else if confirmFromBranchRefresh {
             stateApplied = await self.refreshSessionBranches(confirmingBranchChange: true)
         }

@@ -299,9 +299,11 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         _ scope: OpenClawChatOutboxScope,
         activeLeafEntryID: String,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
-    /// Advances the observed transcript tip without changing branch ownership.
+    /// Advances the observed transcript tip only while branch ownership still
+    /// matches the epoch captured by the caller.
     func updateLastActiveLeafEntryID(
         _ leafEntryID: String,
+        expectedEpoch: Int,
         for scope: OpenClawChatOutboxScope) async -> Bool
     /// Retry only if the failed row still matches the version shown to the user.
     /// The default fails closed so a store cannot bypass branch-change parking.
@@ -357,6 +359,7 @@ extension OpenClawChatCommandOutbox {
 
     public func updateLastActiveLeafEntryID(
         _: String,
+        expectedEpoch _: Int,
         for _: OpenClawChatOutboxScope) async -> Bool
     {
         false

@@ -67,7 +67,7 @@ extension OpenClawChatViewModel {
                 Task {
                     await self.refreshHistoryAfterRun(historyRequest: context)
                     guard self.isCurrentSession(context.session) else { return }
-                    await self.refreshSessionBranches()
+                    await self.refreshSessionBranches(confirmingBranchChange: true)
                 }
                 return
             }

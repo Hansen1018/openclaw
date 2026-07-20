@@ -51,6 +51,7 @@ private func seedOutboxBranch(
 {
     await store.updateLastActiveLeafEntryID(
         "leaf-new",
+        expectedEpoch: 0,
         for: OpenClawChatOutboxScope(sessionKey: sessionKey, agentID: agentID))
 }
 
@@ -635,9 +636,13 @@ extension BranchScopeForwardingOutbox {
 
     func updateLastActiveLeafEntryID(
         _ leafEntryID: String,
+        expectedEpoch: Int,
         for scope: OpenClawChatOutboxScope) async -> Bool
     {
-        await self.branchStateBase.updateLastActiveLeafEntryID(leafEntryID, for: scope)
+        await self.branchStateBase.updateLastActiveLeafEntryID(
+            leafEntryID,
+            expectedEpoch: expectedEpoch,
+            for: scope)
     }
 }
 
@@ -821,9 +826,13 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
 
     func updateLastActiveLeafEntryID(
         _ leafEntryID: String,
+        expectedEpoch: Int,
         for scope: OpenClawChatOutboxScope) async -> Bool
     {
-        await self.base.updateLastActiveLeafEntryID(leafEntryID, for: scope)
+        await self.base.updateLastActiveLeafEntryID(
+            leafEntryID,
+            expectedEpoch: expectedEpoch,
+            for: scope)
     }
 
     func markCommandRetriedIfPresent(
@@ -1216,7 +1225,7 @@ struct ChatViewModelOutboxTests {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
-        #expect(await store.updateLastActiveLeafEntryID("leaf-active", for: scope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-active", expectedEpoch: 0, for: scope))
         let transport = OutboxTestTransport(healthy: false)
         await transport.state.setBranchSwitchFails(true)
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
@@ -1252,6 +1261,7 @@ struct ChatViewModelOutboxTests {
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         #expect(await store.updateLastActiveLeafEntryID(
             "leaf-new",
+            expectedEpoch: 0,
             for: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "paused",
@@ -1279,12 +1289,12 @@ struct ChatViewModelOutboxTests {
         #expect(await MainActor.run { vm.healthOK })
     }
 
-    @Test func `transient branch list failure retries and resumes delivery`() async throws {
+    @Test func `branch reconcile retries past three attempts and resumes delivery`() async throws {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
-        #expect(await store.updateLastActiveLeafEntryID("leaf-new", for: scope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-new", expectedEpoch: 0, for: scope))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "retry-reconcile",
             sessionKey: "main",
@@ -1301,12 +1311,13 @@ struct ChatViewModelOutboxTests {
         await transport.state.setBranchListFails(true)
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run {
-            vm.outboxBranchReconcileRetryDelaysMs = [10, 10]
+            vm.outboxBranchReconcileRetryDelaysMs = [1, 2]
             vm.load()
         }
-        try await waitUntil("first branch reconcile fails") {
-            await transport.state.branchListRequestCount > 0
+        try await waitUntil("branch reconcile passes the former retry ceiling") {
+            await transport.state.branchListRequestCount >= 5
         }
+        #expect(await MainActor.run { vm.outboxBranchReconcileRetryAttempts[scope] == 1 })
 
         await transport.state.setBranchListFails(false)
 
@@ -1375,7 +1386,7 @@ struct ChatViewModelOutboxTests {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
-        #expect(await store.updateLastActiveLeafEntryID("leaf-old", for: scope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-old", expectedEpoch: 0, for: scope))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "wiped-transcript",
             sessionKey: "main",
@@ -1409,6 +1420,7 @@ struct ChatViewModelOutboxTests {
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         #expect(await store.updateLastActiveLeafEntryID(
             "leaf-old",
+            expectedEpoch: 0,
             for: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "shared-row",
@@ -1488,7 +1500,7 @@ struct ChatViewModelOutboxTests {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
-        #expect(await store.updateLastActiveLeafEntryID("leaf-new", for: scope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-new", expectedEpoch: 0, for: scope))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "reconnect-scope",
             sessionKey: "main",
@@ -1534,7 +1546,7 @@ struct ChatViewModelOutboxTests {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
-        #expect(await store.updateLastActiveLeafEntryID("leaf-active", for: scope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-active", expectedEpoch: 0, for: scope))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "closed-app-switch",
             sessionKey: "main",
@@ -1579,8 +1591,8 @@ struct ChatViewModelOutboxTests {
         let alphaScope = OpenClawChatOutboxScope(sessionKey: "global", agentID: "alpha")
         let betaScope = OpenClawChatOutboxScope(sessionKey: "global", agentID: "beta")
         let now = Date().timeIntervalSince1970
-        #expect(await store.updateLastActiveLeafEntryID("leaf-active", for: alphaScope))
-        #expect(await store.updateLastActiveLeafEntryID("leaf-new", for: betaScope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-active", expectedEpoch: 0, for: alphaScope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-new", expectedEpoch: 0, for: betaScope))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "alpha-command",
             sessionKey: "global",
@@ -1637,7 +1649,7 @@ struct ChatViewModelOutboxTests {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
-        #expect(await store.updateLastActiveLeafEntryID("leaf-missing", for: scope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-missing", expectedEpoch: 0, for: scope))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "ambiguous",
             sessionKey: "main",
@@ -1696,6 +1708,7 @@ struct ChatViewModelOutboxTests {
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
         #expect(await store.updateLastActiveLeafEntryID(
             "leaf-new",
+            expectedEpoch: 0,
             for: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "abandoned",
@@ -1784,6 +1797,7 @@ struct ChatViewModelOutboxTests {
         try await sendWhileOffline(vm, text: "do not replay")
         #expect(await store.updateLastActiveLeafEntryID(
             "leaf-active",
+            expectedEpoch: 0,
             for: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")))
         await transport.state.setHealthy(true)
         await transport.state.setHistoryFails(true)

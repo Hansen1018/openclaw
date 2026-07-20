@@ -6,6 +6,12 @@ private let chatSessionActionsLogger = Logger(
     category: "OpenClawChat")
 
 extension OpenClawChatViewModel {
+    private enum SessionBranchesRefreshPurpose {
+        case readOnly
+        case reconcile
+        case finalizeMutation
+    }
+
     public func refreshSessions(limit: Int? = nil) {
         let context = self.currentSessionSnapshot()
         Task { await self.fetchSessions(limit: limit, sessionSnapshot: context) }
@@ -384,14 +390,24 @@ extension OpenClawChatViewModel {
             let result = try await self.transport.rewindSession(
                 sessionKey: initiatingSession.key,
                 entryId: entryID)
-            guard self.isCurrentSession(initiatingSession) else { return }
+            guard self.isCurrentSession(initiatingSession) else {
+                await self.recoverOutboxAfterSessionMutationRefreshFailure(
+                    initiatingSession,
+                    branchingUnsupported: false)
+                return
+            }
             self.replyTarget = nil
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             self.input = result.editorText ?? ""
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
-            guard self.isCurrentSession(initiatingSession) else { return }
+            guard self.isCurrentSession(initiatingSession) else {
+                await self.recoverOutboxAfterSessionMutationRefreshFailure(
+                    initiatingSession,
+                    branchingUnsupported: false)
+                return
+            }
             await self.refreshSessionBranches(confirmingBranchChange: true)
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
@@ -404,29 +420,28 @@ extension OpenClawChatViewModel {
     @discardableResult
     public func refreshSessionBranches(confirmingBranchChange: Bool = false) async -> Bool {
         let session = self.currentSessionSnapshot()
-        let refreshGeneration = self.beginSessionBranchesRefresh(for: session)
+        let refreshGeneration = self.beginSessionBranchesRefresh()
         let previousState = await self.captureOutboxBranchState(for: session)
         return await self.performSessionBranchesRefresh(
             for: session,
             refreshGeneration: refreshGeneration,
             previousState: previousState,
-            confirmingBranchChange: confirmingBranchChange)
+            purpose: confirmingBranchChange ? .finalizeMutation : .readOnly)
     }
 
     func refreshSessionBranches(
         for session: SessionSnapshot,
         preBootstrapBranchState: OpenClawChatOutboxBranchState?) async -> Bool
     {
-        let refreshGeneration = self.beginSessionBranchesRefresh(for: session)
+        let refreshGeneration = self.beginSessionBranchesRefresh()
         return await self.performSessionBranchesRefresh(
             for: session,
             refreshGeneration: refreshGeneration,
             previousState: preBootstrapBranchState,
-            confirmingBranchChange: false)
+            purpose: .reconcile)
     }
 
-    private func beginSessionBranchesRefresh(for session: SessionSnapshot) -> UInt64 {
-        self.pauseOutboxBranchScope(session)
+    private func beginSessionBranchesRefresh() -> UInt64 {
         self.sessionBranchesRefreshGeneration &+= 1
         self.isLoadingSessionBranches = true
         return self.sessionBranchesRefreshGeneration
@@ -436,7 +451,7 @@ extension OpenClawChatViewModel {
         for session: SessionSnapshot,
         refreshGeneration: UInt64,
         previousState: OpenClawChatOutboxBranchState?,
-        confirmingBranchChange: Bool) async -> Bool
+        purpose: SessionBranchesRefreshPurpose) async -> Bool
     {
         let connectionGeneration = self.outboxBranchConnectionGeneration
         defer {
@@ -453,25 +468,51 @@ extension OpenClawChatViewModel {
             guard self.isCurrentSession(session),
                   refreshGeneration == self.sessionBranchesRefreshGeneration,
                   connectionGeneration == self.outboxBranchConnectionGeneration
-            else { return false }
-            let outboxReconciled = if confirmingBranchChange,
-                                      let activeLeafEntryID = Self.activeBranchLeafEntryID(in: response.branches)
-            {
-                await self.confirmOutboxBranchChange(session, activeLeafEntryID: activeLeafEntryID)
-            } else {
-                await self.reconcileOutboxBranchScope(
+            else {
+                if case .finalizeMutation = purpose {
+                    await self.recoverOutboxAfterSessionMutationRefreshFailure(
+                        session,
+                        branchingUnsupported: false)
+                }
+                return false
+            }
+            switch purpose {
+            case .readOnly:
+                if let outbox = self.outbox,
+                   let scope = self.outboxBranchScope(for: session),
+                   let expectedEpoch = previousState?.epoch,
+                   let activeLeafEntryID = Self.activeBranchLeafEntryID(in: response.branches)
+                {
+                    _ = await outbox.updateLastActiveLeafEntryID(
+                        activeLeafEntryID,
+                        expectedEpoch: expectedEpoch,
+                        for: scope)
+                }
+            case .reconcile:
+                guard await self.reconcileOutboxBranchScope(
                     session,
                     branches: response.branches,
                     previousState: previousState,
                     connectionGeneration: connectionGeneration)
+                else {
+                    self.pauseOutboxBranchScope(session)
+                    return false
+                }
+            case .finalizeMutation:
+                guard let activeLeafEntryID = Self.activeBranchLeafEntryID(in: response.branches),
+                      await self.confirmOutboxBranchChange(
+                          session,
+                          activeLeafEntryID: activeLeafEntryID)
+                else {
+                    await self.recoverOutboxAfterSessionMutationRefreshFailure(
+                        session,
+                        branchingUnsupported: false)
+                    return false
+                }
             }
-            guard outboxReconciled,
-                  self.isCurrentSession(session),
+            guard self.isCurrentSession(session),
                   refreshGeneration == self.sessionBranchesRefreshGeneration
-            else {
-                self.pauseOutboxBranchScope(session)
-                return false
-            }
+            else { return false }
             self.sessionBranches = response.branches
             self.flushOutboxIfNeeded()
             return true
@@ -479,11 +520,28 @@ extension OpenClawChatViewModel {
             guard self.isCurrentSession(session),
                   refreshGeneration == self.sessionBranchesRefreshGeneration,
                   connectionGeneration == self.outboxBranchConnectionGeneration
-            else { return false }
+            else {
+                if case .finalizeMutation = purpose {
+                    await self.recoverOutboxAfterSessionMutationRefreshFailure(
+                        session,
+                        branchingUnsupported: false)
+                }
+                return false
+            }
             chatSessionActionsLogger.debug(
                 "sessions.branches.list failed \(error.localizedDescription, privacy: .public)")
-            if Self.branchListingIsUnsupported(error) {
+            let branchingUnsupported = Self.branchListingIsUnsupported(error)
+            switch purpose {
+            case .readOnly:
+                break
+            case .reconcile where branchingUnsupported:
                 self.allowOutboxReplayWithoutBranching(session)
+            case .reconcile:
+                self.pauseOutboxBranchScope(session)
+            case .finalizeMutation:
+                await self.recoverOutboxAfterSessionMutationRefreshFailure(
+                    session,
+                    branchingUnsupported: branchingUnsupported)
             }
             return false
         }
@@ -529,9 +587,14 @@ extension OpenClawChatViewModel {
                 sessionKey: initiatingSession.key,
                 leafEntryId: normalizedLeafEntryID)
             guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else {
-                _ = await self.confirmOutboxBranchChange(
+                if await self.confirmOutboxBranchChange(
                     initiatingSession,
-                    activeLeafEntryID: normalizedLeafEntryID)
+                    activeLeafEntryID: normalizedLeafEntryID) == false
+                {
+                    await self.recoverOutboxAfterSessionMutationRefreshFailure(
+                        initiatingSession,
+                        branchingUnsupported: false)
+                }
                 return
             }
             self.replyTarget = nil

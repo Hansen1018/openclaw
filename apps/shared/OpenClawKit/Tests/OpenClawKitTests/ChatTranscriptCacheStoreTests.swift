@@ -1424,12 +1424,45 @@ struct ChatCommandOutboxStoreTests {
         #expect(await !switchStore.beginBranchSwitch(scope))
     }
 
+    @Test func `expired branch switch lease is reclaimed by claim`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
+        #expect(await store.beginBranchSwitch(scope))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "after-crash",
+            sessionKey: "main",
+            agentID: "agent-a",
+            text: "deliver after expiry")))
+        #expect(await store.claimNextCommand() == nil)
+
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        let expired = Date().timeIntervalSince1970 -
+            OpenClawChatSQLiteTranscriptCache.outboxBranchSwitchLeaseMaxAge - 1
+        var statement: OpaquePointer?
+        #expect(sqlite3_prepare_v2(
+            raw,
+            "UPDATE outbox_branch_scopes SET switch_pending_since = ?1",
+            -1,
+            &statement,
+            nil) == SQLITE_OK)
+        sqlite3_bind_double(statement, 1, expired)
+        #expect(sqlite3_step(statement) == SQLITE_DONE)
+        sqlite3_finalize(statement)
+        sqlite3_close(raw)
+
+        #expect(await store.claimNextCommand()?.id == "after-crash")
+        #expect(await store.branchState(for: scope)?.switchPendingSince == nil)
+    }
+
     @Test func `retry after accepted branch parking mints identity but queued parking keeps it`() async throws {
         let url = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         let acceptedScope = OpenClawChatOutboxScope(sessionKey: "accepted", agentID: "agent-a")
-        #expect(await store.updateLastActiveLeafEntryID("leaf-a", for: acceptedScope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: acceptedScope))
         #expect(await store.enqueueCommand(outboxCommand(
             id: "accepted-id",
             sessionKey: "accepted",
@@ -1463,7 +1496,7 @@ struct ChatCommandOutboxStoreTests {
             agentID: "agent-a",
             text: "not dispatched")))
         let queuedScope = OpenClawChatOutboxScope(sessionKey: "queued", agentID: "agent-a")
-        #expect(await store.updateLastActiveLeafEntryID("leaf-a", for: queuedScope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: queuedScope))
         _ = try #require(await store.confirmBranchChange(
             queuedScope,
             activeLeafEntryID: "leaf-b",
@@ -1487,7 +1520,7 @@ struct ChatCommandOutboxStoreTests {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
-        #expect(await store.updateLastActiveLeafEntryID("leaf-b", for: scope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-b", expectedEpoch: 0, for: scope))
         #expect(await store.enqueueCommand(outboxCommand(
             id: "new-branch-row",
             sessionKey: "main",
@@ -1513,8 +1546,8 @@ struct ChatCommandOutboxStoreTests {
         let branchStore = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         let transcriptStore = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
-        #expect(await branchStore.updateLastActiveLeafEntryID("leaf-0", for: scope))
-        #expect(await transcriptStore.updateLastActiveLeafEntryID("tip-0", for: scope))
+        #expect(await branchStore.updateLastActiveLeafEntryID("leaf-0", expectedEpoch: 0, for: scope))
+        #expect(await transcriptStore.updateLastActiveLeafEntryID("tip-0", expectedEpoch: 0, for: scope))
 
         for epoch in 1...50 {
             async let branchChange = branchStore.confirmBranchChange(
@@ -1523,6 +1556,7 @@ struct ChatCommandOutboxStoreTests {
                 lastError: "branch changed")
             async let transcriptUpdate = transcriptStore.updateLastActiveLeafEntryID(
                 "tip-\(epoch)",
+                expectedEpoch: epoch - 1,
                 for: scope)
             let (branchResult, transcriptResult) = await (branchChange, transcriptUpdate)
             if branchResult == nil {
@@ -1532,10 +1566,32 @@ struct ChatCommandOutboxStoreTests {
                     lastError: "branch changed") != nil)
             }
             if !transcriptResult {
-                #expect(await transcriptStore.updateLastActiveLeafEntryID("tip-\(epoch)", for: scope))
+                #expect(await transcriptStore.updateLastActiveLeafEntryID(
+                    "tip-\(epoch)",
+                    expectedEpoch: epoch,
+                    for: scope))
             }
             #expect(await branchStore.branchState(for: scope)?.epoch == epoch)
         }
+    }
+
+    @Test func `stale transcript tip write cannot cross a branch epoch`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        _ = try #require(await store.confirmBranchChange(
+            scope,
+            activeLeafEntryID: "leaf-b",
+            lastError: "branch changed"))
+
+        #expect(await !store.updateLastActiveLeafEntryID(
+            "stale-tip",
+            expectedEpoch: 0,
+            for: scope))
+        #expect(await store.branchState(for: scope)?.epoch == 1)
+        #expect(await store.branchState(for: scope)?.lastActiveLeafEntryID == "leaf-b")
     }
 
     @Test func `branch parking wins over a retry captured from the previous failure`() async throws {

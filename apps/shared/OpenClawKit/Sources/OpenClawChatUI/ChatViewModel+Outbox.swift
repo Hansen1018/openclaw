@@ -92,6 +92,19 @@ extension OpenClawChatViewModel {
         _ = await outbox.cancelBranchSwitch(scope)
     }
 
+    func recoverOutboxAfterSessionMutationRefreshFailure(
+        _ session: SessionSnapshot,
+        branchingUnsupported: Bool) async
+    {
+        self.pauseOutboxBranchScope(session)
+        await self.cancelOutboxSessionMutation(session)
+        if branchingUnsupported {
+            self.allowOutboxReplayWithoutBranching(session)
+        } else {
+            self.reconcilePendingOutboxBranchScopes()
+        }
+    }
+
     func confirmOutboxBranchChange(_ session: SessionSnapshot, activeLeafEntryID: String) async -> Bool {
         guard let outbox else { return true }
         guard let scope = self.outboxBranchScope(for: session) else { return false }
@@ -142,10 +155,15 @@ extension OpenClawChatViewModel {
               let tip = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines),
               !tip.isEmpty
         else { return }
+        let branchStateTask = Task { await outbox.branchState(for: scope) }
         let previous = self.pendingCacheWriteTask
         self.pendingCacheWriteTask = Task.detached {
             await previous?.value
-            _ = await outbox.updateLastActiveLeafEntryID(tip, for: scope)
+            guard let expectedEpoch = await branchStateTask.value?.epoch else { return }
+            _ = await outbox.updateLastActiveLeafEntryID(
+                tip,
+                expectedEpoch: expectedEpoch,
+                for: scope)
         }
     }
 
@@ -276,12 +294,15 @@ extension OpenClawChatViewModel {
         connectionGeneration: UInt64)
     {
         guard self.healthOK,
-              self.outboxBranchReconcileRetryTasks[scope] == nil
+              self.outboxBranchReconcileRetryTasks[scope] == nil,
+              !self.outboxBranchReconcileRetryDelaysMs.isEmpty
         else { return }
         let attempt = self.outboxBranchReconcileRetryAttempts[scope, default: 0]
-        guard attempt < self.outboxBranchReconcileRetryDelaysMs.count else { return }
-        self.outboxBranchReconcileRetryAttempts[scope] = attempt + 1
-        let delayMs = self.outboxBranchReconcileRetryDelaysMs[attempt]
+        let delayIndex = min(attempt, self.outboxBranchReconcileRetryDelaysMs.count - 1)
+        self.outboxBranchReconcileRetryAttempts[scope] = min(
+            delayIndex + 1,
+            self.outboxBranchReconcileRetryDelaysMs.count - 1)
+        let delayMs = self.outboxBranchReconcileRetryDelaysMs[delayIndex]
         self.outboxBranchReconcileRetryTasks[scope] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
             guard !Task.isCancelled, let self else { return }
@@ -665,7 +686,10 @@ extension OpenClawChatViewModel {
                     canonicalMessageIdempotencyKey: messageKey)
             }
             if let outbox, let tip, !tip.isEmpty {
-                _ = await outbox.updateLastActiveLeafEntryID(tip, for: scope)
+                _ = await outbox.updateLastActiveLeafEntryID(
+                    tip,
+                    expectedEpoch: command.scopeBranchEpoch ?? command.branchEpoch,
+                    for: scope)
             }
         }
         self.pendingCacheWriteTask = task
@@ -810,6 +834,9 @@ extension OpenClawChatViewModel {
                 let session = self.currentSessionSnapshot()
                 Task { await self.fetchSessions(limit: 50, sessionSnapshot: session) }
             }
+        } else if ok, !self.outboxBranchReconcileRetryTasks.isEmpty {
+            self.resetOutboxBranchReconcileBackoff()
+            self.reconcilePendingOutboxBranchScopes()
         }
         if ok {
             self.hasEstablishedTransportHealth = true
@@ -820,6 +847,10 @@ extension OpenClawChatViewModel {
         self.outboxBranchConnectionGeneration &+= 1
         self.reconciledOutboxBranchScopes.removeAll()
         self.reconcilingOutboxBranchScopes.removeAll()
+        self.resetOutboxBranchReconcileBackoff()
+    }
+
+    private func resetOutboxBranchReconcileBackoff() {
         for task in self.outboxBranchReconcileRetryTasks.values {
             task.cancel()
         }
@@ -867,6 +898,16 @@ extension OpenClawChatViewModel {
         }
         let visibleSession = self.currentSessionSnapshot()
         self.presentOutboxCommands(initialCommands.filter { self.commandMatchesTarget($0, session: visibleSession) })
+        let hasUnreconciledScope = initialCommands.contains { command in
+            (command.status == .queued ||
+                command.status == .sending ||
+                command.status == .awaitingConfirmation) &&
+                !self.reconciledOutboxBranchScopes.contains(Self.outboxBranchScope(for: command))
+        }
+        if hasUnreconciledScope {
+            self.reconcilePendingOutboxBranchScopes()
+            return
+        }
         // Do not capability-gate ordinary live chat when no durable work
         // needs a replay lease (notably against older gateways).
         let hasRouteWork = initialCommands.contains { command in

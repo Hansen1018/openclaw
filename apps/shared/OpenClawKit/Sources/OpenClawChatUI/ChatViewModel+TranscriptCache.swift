@@ -33,6 +33,11 @@ extension OpenClawChatViewModel {
             return entryID?.isEmpty == false ? entryID : nil
         }.first
         guard transcriptCache != nil || (outbox != nil && scope != nil && tip != nil) else { return }
+        let branchStateTask: Task<OpenClawChatOutboxBranchState?, Never>? = if let outbox, let scope {
+            Task { await outbox.branchState(for: scope) }
+        } else {
+            nil
+        }
         // Chain writes so an older snapshot can never land after a newer one;
         // detached tasks alone give no ordering guarantee across awaits.
         let previous = pendingCacheWriteTask
@@ -45,8 +50,16 @@ extension OpenClawChatViewModel {
                     messages: messages,
                     canonicalMessageIdempotencyKeys: canonicalMessageIdempotencyKeys)
             }
-            if let outbox, let scope, let tip {
-                _ = await outbox.updateLastActiveLeafEntryID(tip, for: scope)
+            if let outbox,
+               let scope,
+               let tip,
+               let branchStateTask,
+               let expectedEpoch = await branchStateTask.value?.epoch
+            {
+                _ = await outbox.updateLastActiveLeafEntryID(
+                    tip,
+                    expectedEpoch: expectedEpoch,
+                    for: scope)
             }
         }
     }
