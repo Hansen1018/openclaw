@@ -172,6 +172,13 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var reconcilingOutboxBranchScopes: Set<OpenClawChatOutboxScope> = []
     @ObservationIgnored
+    var outboxBranchConnectionGeneration: UInt64 = 0
+    @ObservationIgnored
+    var bootstrapOutboxBranchStateCapture: (
+        generation: UInt64,
+        session: SessionSnapshot,
+        task: Task<OpenClawChatOutboxBranchState?, Never>)?
+    @ObservationIgnored
     var cancelingOutboxCommandIDs: Set<String> = []
     @ObservationIgnored
     var outboxPresentationGeneration: UInt64 = 0
@@ -870,6 +877,7 @@ extension OpenClawChatViewModel {
         self.isLoading = true
         self.errorText = nil
         self.invalidateSessionMetadataReadiness()
+        self.invalidateOutboxBranchReconciliation()
         self.healthOK = false
         clearPendingRuns(reason: nil)
         self.pendingToolCallsById = [:]
@@ -881,12 +889,18 @@ extension OpenClawChatViewModel {
         let context = BootstrapContext(
             id: bootstrapGeneration,
             historyRequest: historyRequest)
+        let captureTask = Task { [weak self] in
+            await self?.captureOutboxBranchState(for: context.session)
+        }
+        self.bootstrapOutboxBranchStateCapture = (
+            generation: context.id,
+            session: context.session,
+            task: captureTask)
         self.pauseOutboxBranchScope(context.session)
         if paintCachedTranscript {
             paintFromCacheIfNeeded(session: context.session)
         }
         restoreOutboxMessages(session: context.session)
-        Task { [weak self] in await self?.refreshSessionBranches() }
         self.bootstrapTask = Task { [weak self] in
             guard let self else { return }
             await self.bootstrap(context: context)
@@ -901,6 +915,15 @@ extension OpenClawChatViewModel {
             }
         }
         do {
+            guard let capture = self.bootstrapOutboxBranchStateCapture,
+                  capture.generation == context.id
+            else { return }
+            let preBootstrapBranchState = await capture.task.value
+            guard self.isCurrentBootstrap(context) else { return }
+            async let branchRefresh = self.refreshSessionBranches(
+                for: context.session,
+                preBootstrapBranchState: preBootstrapBranchState)
+
             await self.syncActiveSessionSubscription(startingWith: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }
 
@@ -913,6 +936,8 @@ extension OpenClawChatViewModel {
                 for: context.historyRequest,
                 preservingOptimisticLocalMessages: false,
                 syncThinkingOptions: true)
+            _ = await branchRefresh
+            guard self.isCurrentBootstrap(context) else { return }
             await pollHealthIfNeeded(
                 force: true,
                 sessionSnapshot: context.session,

@@ -731,16 +731,30 @@ extension OpenClawChatSQLiteTranscriptCache {
         return sqlite3_changes(db) > 0 ? .updated : .missing
     }
 
-    func branchState(
-        for scope: OpenClawChatOutboxScope) async -> (epoch: Int, lastActiveLeafEntryID: String?)?
+    public func branchState(
+        for scope: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState?
     {
         guard !self.isRetired, let db = await handle(), self.ensureBranchScopeRow(db, scope: scope)
         else { return nil }
-        return self.readBranchState(db, scope: scope)
+        guard let state = self.readBranchState(db, scope: scope),
+              let pendingCount = self.selectInt(
+                  db,
+                  sql: """
+                  SELECT COUNT(*) FROM outbox_commands
+                  WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
+                    AND status IN ('queued', 'sending', 'awaiting_confirmation')
+                  """,
+                  bindings: self.scopeBindings(scope))
+        else { return nil }
+        return OpenClawChatOutboxBranchState(
+            epoch: state.epoch,
+            lastActiveLeafEntryID: state.lastActiveLeafEntryID,
+            hadPendingCommands: pendingCount > 0)
     }
 
     public func reconcileBranchScope(
         _ scope: OpenClawChatOutboxScope,
+        previousState: OpenClawChatOutboxBranchState,
         activeLeafEntryID: String,
         branchLeafEntryIDs: Set<String>,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
@@ -756,17 +770,10 @@ extension OpenClawChatSQLiteTranscriptCache {
         }
         guard self.ensureBranchScopeRow(db, scope: scope),
               let state = self.readBranchState(db, scope: scope),
-              let pendingCount = selectInt(
-                  db,
-                  sql: """
-                  SELECT COUNT(*) FROM outbox_commands
-                  WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
-                    AND status IN ('queued', 'sending', 'awaiting_confirmation')
-                  """,
-                  bindings: self.scopeBindings(scope))
+              state.epoch == previousState.epoch
         else { return nil }
 
-        if let lastLeaf = state.lastActiveLeafEntryID,
+        if let lastLeaf = previousState.lastActiveLeafEntryID,
            lastLeaf != activeLeafEntryID,
            branchLeafEntryIDs.contains(lastLeaf)
         {
@@ -778,7 +785,9 @@ extension OpenClawChatSQLiteTranscriptCache {
                 lastError: lastError)
             else { return nil }
         } else {
-            if state.lastActiveLeafEntryID != activeLeafEntryID, pendingCount > 0 {
+            if previousState.lastActiveLeafEntryID != activeLeafEntryID,
+               previousState.hadPendingCommands
+            {
                 // A crash after a transcript append can make the tip ambiguous.
                 // Requiring one manual retry is preferable to silent wrong-branch delivery.
                 guard self.parkPendingCommands(db, scope: scope, lastError: lastError) else { return nil }
@@ -831,14 +840,15 @@ extension OpenClawChatSQLiteTranscriptCache {
         guard !self.isRetired,
               let leafEntryID = Self.normalizedLeafEntryID(leafEntryID),
               let db = await handle(),
-              self.ensureBranchScopeRow(db, scope: scope),
-              let state = self.readBranchState(db, scope: scope)
+              self.ensureBranchScopeRow(db, scope: scope)
         else { return false }
-        return self.writeBranchState(
+        return self.execute(
             db,
-            scope: scope,
-            epoch: state.epoch,
-            lastActiveLeafEntryID: leafEntryID)
+            sql: """
+            UPDATE outbox_branch_scopes SET last_active_leaf_id = ?4
+            WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
+            """,
+            bindings: self.scopeBindings(scope) + [leafEntryID])
     }
 
     private static func normalizedLeafEntryID(_ leafEntryID: String?) -> String? {
@@ -863,7 +873,7 @@ extension OpenClawChatSQLiteTranscriptCache {
 
     private func readBranchState(
         _ db: OpaquePointer,
-        scope: OpenClawChatOutboxScope) -> (epoch: Int, lastActiveLeafEntryID: String?)?
+        scope: OpenClawChatOutboxScope) -> OpenClawChatOutboxBranchState?
     {
         var statement: OpaquePointer?
         let sql = """
@@ -875,7 +885,7 @@ extension OpenClawChatSQLiteTranscriptCache {
         guard self.bind(statement, bindings: self.scopeBindings(scope)),
               sqlite3_step(statement) == SQLITE_ROW
         else { return nil }
-        return (
+        return OpenClawChatOutboxBranchState(
             epoch: Int(sqlite3_column_int64(statement, 0)),
             lastActiveLeafEntryID: sqlite3_column_text(statement, 1).map { String(cString: $0) })
     }

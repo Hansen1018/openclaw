@@ -83,6 +83,7 @@ extension OpenClawChatViewModel {
     func confirmOutboxBranchChange(_ session: SessionSnapshot, activeLeafEntryID: String) async -> Bool {
         guard let outbox else { return true }
         guard let scope = self.outboxBranchScope(for: session) else { return false }
+        let connectionGeneration = self.outboxBranchConnectionGeneration
         self.reconciledOutboxBranchScopes.remove(scope)
         self.outboxPresentationGeneration &+= 1
         self.outboxRetryTask?.cancel()
@@ -95,7 +96,9 @@ extension OpenClawChatViewModel {
         else {
             return false
         }
-        self.reconciledOutboxBranchScopes.insert(scope)
+        if connectionGeneration == self.outboxBranchConnectionGeneration {
+            self.reconciledOutboxBranchScopes.insert(scope)
+        }
         guard self.isCurrentSession(session) else { return true }
         self.presentOutboxCommands(commands.filter { self.commandMatchesTarget($0, session: session) })
         return true
@@ -104,6 +107,21 @@ extension OpenClawChatViewModel {
     func pauseOutboxBranchScope(_ session: SessionSnapshot) {
         guard let scope = self.outboxBranchScope(for: session) else { return }
         self.reconciledOutboxBranchScopes.remove(scope)
+    }
+
+    func captureOutboxBranchState(
+        for session: SessionSnapshot) async -> OpenClawChatOutboxBranchState?
+    {
+        guard let outbox, let scope = self.outboxBranchScope(for: session) else { return nil }
+        await self.pendingCacheWriteTask?.value
+        return await outbox.branchState(for: scope)
+    }
+
+    private func waitForBootstrapOutboxBranchCapture(for session: SessionSnapshot) async {
+        guard let capture = self.bootstrapOutboxBranchStateCapture,
+              capture.session == session
+        else { return }
+        _ = await capture.task.value
     }
 
     func observeOutboxTranscriptTip(_ message: OpenClawChatMessage, session: SessionSnapshot) {
@@ -122,13 +140,23 @@ extension OpenClawChatViewModel {
     @discardableResult
     func reconcileOutboxBranchScope(
         _ session: SessionSnapshot,
-        branches: [OpenClawChatSessionBranch]) async -> Bool
+        branches: [OpenClawChatSessionBranch],
+        previousState: OpenClawChatOutboxBranchState?,
+        connectionGeneration: UInt64) async -> Bool
     {
         guard let outbox else { return true }
         await self.pendingCacheWriteTask?.value
-        guard let scope = self.outboxBranchScope(for: session),
-              let commands = await self.reconcileOutboxBranchScope(scope, branches: branches, outbox: outbox)
+        guard connectionGeneration == self.outboxBranchConnectionGeneration,
+              let scope = self.outboxBranchScope(for: session),
+              let previousState,
+              let commands = await self.reconcileOutboxBranchScope(
+                  scope,
+                  branches: branches,
+                  previousState: previousState,
+                  outbox: outbox)
         else { return false }
+        guard connectionGeneration == self.outboxBranchConnectionGeneration else { return false }
+        self.reconciledOutboxBranchScopes.insert(scope)
         guard self.isCurrentSession(session) else { return true }
         self.presentOutboxCommands(commands.filter { self.commandMatchesTarget($0, session: session) })
         return true
@@ -137,6 +165,7 @@ extension OpenClawChatViewModel {
     private func reconcileOutboxBranchScope(
         _ scope: OpenClawChatOutboxScope,
         branches: [OpenClawChatSessionBranch],
+        previousState: OpenClawChatOutboxBranchState,
         outbox: any OpenClawChatCommandOutbox) async -> [OpenClawChatOutboxCommand]?
     {
         guard let activeLeafEntryID = Self.activeBranchLeafEntryID(in: branches) else { return nil }
@@ -147,11 +176,11 @@ extension OpenClawChatViewModel {
         let reason = "Session branch changed; review and retry this message."
         guard let commands = await outbox.reconcileBranchScope(
             scope,
+            previousState: previousState,
             activeLeafEntryID: activeLeafEntryID,
             branchLeafEntryIDs: branchLeafEntryIDs,
             lastError: reason)
         else { return nil }
-        self.reconciledOutboxBranchScopes.insert(scope)
         return commands
     }
 
@@ -171,21 +200,39 @@ extension OpenClawChatViewModel {
                 $0.status == .queued || $0.status == .sending || $0.status == .awaitingConfirmation
             }, by: Self.outboxBranchScope(for:))
             for (scope, scopeCommands) in scopedCommands {
+                let connectionGeneration = self.outboxBranchConnectionGeneration
                 guard !self.reconciledOutboxBranchScopes.contains(scope),
                       self.reconcilingOutboxBranchScopes.insert(scope).inserted,
                       let command = scopeCommands.first
                 else { continue }
-                defer { self.reconcilingOutboxBranchScopes.remove(scope) }
+                defer {
+                    if connectionGeneration == self.outboxBranchConnectionGeneration {
+                        self.reconcilingOutboxBranchScopes.remove(scope)
+                    }
+                }
                 do {
+                    guard let previousState = await outbox.branchState(for: scope),
+                          connectionGeneration == self.outboxBranchConnectionGeneration
+                    else { continue }
                     let response = try await self.transport.listSessionBranches(
-                        sessionKey: command.deliverySessionKey)
-                    _ = await self.reconcileOutboxBranchScope(
+                        sessionKey: command.deliverySessionKey,
+                        agentID: command.agentID)
+                    guard connectionGeneration == self.outboxBranchConnectionGeneration else { continue }
+                    let reconciled = await self.reconcileOutboxBranchScope(
                         scope,
                         branches: response.branches,
+                        previousState: previousState,
                         outbox: outbox)
+                    if reconciled != nil,
+                       connectionGeneration == self.outboxBranchConnectionGeneration
+                    {
+                        self.reconciledOutboxBranchScopes.insert(scope)
+                    }
                 } catch {
                     if Self.branchListingIsUnsupported(error) {
-                        self.reconciledOutboxBranchScopes.insert(scope)
+                        if connectionGeneration == self.outboxBranchConnectionGeneration {
+                            self.reconciledOutboxBranchScopes.insert(scope)
+                        }
                     } else {
                         outboxLogger.debug(
                             "outbox branch reconcile paused \(error.localizedDescription, privacy: .public)")
@@ -231,6 +278,7 @@ extension OpenClawChatViewModel {
             if result == .updated {
                 // Durable work is gateway-global. Flush even when the visible
                 // session changed while the SQLite update was suspended.
+                self.reconcilePendingOutboxBranchScopes()
                 self.flushOutboxIfNeeded()
             }
             guard self.isCurrentSession(session) else { return }
@@ -366,6 +414,7 @@ extension OpenClawChatViewModel {
             status: .queued,
             retryCount: 0,
             lastError: nil)
+        await self.waitForBootstrapOutboxBranchCapture(for: session)
         let accepted = await outbox.enqueueCommand(command)
         guard accepted else {
             if self.isCurrentSession(session) {
@@ -426,6 +475,7 @@ extension OpenClawChatViewModel {
             lastError: deliveryIsAmbiguous
                 ? OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError
                 : nil)
+        await self.waitForBootstrapOutboxBranchCapture(for: session)
         guard await outbox.enqueueCommand(command) else { return false }
         guard self.isCurrentSession(session) else { return true }
         self.mapOutboxCommand(command, to: messageID)
@@ -665,6 +715,9 @@ extension OpenClawChatViewModel {
     func applyTransportHealth(_ ok: Bool, refreshSessionsOnReconnect: Bool = true) {
         let wasHealthy = self.healthOK
         self.healthOK = ok
+        if !ok, wasHealthy {
+            self.invalidateOutboxBranchReconciliation()
+        }
         if !ok, wasHealthy || self.hasCurrentSessionMetadata {
             self.invalidateSessionMetadataReadiness()
         }
@@ -677,6 +730,12 @@ extension OpenClawChatViewModel {
                 Task { await self.fetchSessions(limit: 50, sessionSnapshot: session) }
             }
         }
+    }
+
+    func invalidateOutboxBranchReconciliation() {
+        self.outboxBranchConnectionGeneration &+= 1
+        self.reconciledOutboxBranchScopes.removeAll()
+        self.reconcilingOutboxBranchScopes.removeAll()
     }
 
     // MARK: - Flush
@@ -1158,7 +1217,7 @@ extension OpenClawChatViewModel {
         return await outbox.recoverInterruptedSends()
     }
 
-    private func outboxAgentID(for session: SessionSnapshot) -> String? {
+    func outboxAgentID(for session: SessionSnapshot) -> String? {
         guard self.transport.outboxRequiresSessionRoutingContract else { return nil }
         if session.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "unknown" {
             return nil

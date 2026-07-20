@@ -398,10 +398,41 @@ extension OpenClawChatViewModel {
     @discardableResult
     public func refreshSessionBranches(confirmingBranchChange: Bool = false) async -> Bool {
         let session = self.currentSessionSnapshot()
+        let refreshGeneration = self.beginSessionBranchesRefresh(for: session)
+        let previousState = await self.captureOutboxBranchState(for: session)
+        return await self.performSessionBranchesRefresh(
+            for: session,
+            refreshGeneration: refreshGeneration,
+            previousState: previousState,
+            confirmingBranchChange: confirmingBranchChange)
+    }
+
+    func refreshSessionBranches(
+        for session: SessionSnapshot,
+        preBootstrapBranchState: OpenClawChatOutboxBranchState?) async -> Bool
+    {
+        let refreshGeneration = self.beginSessionBranchesRefresh(for: session)
+        return await self.performSessionBranchesRefresh(
+            for: session,
+            refreshGeneration: refreshGeneration,
+            previousState: preBootstrapBranchState,
+            confirmingBranchChange: false)
+    }
+
+    private func beginSessionBranchesRefresh(for session: SessionSnapshot) -> UInt64 {
         self.pauseOutboxBranchScope(session)
         self.sessionBranchesRefreshGeneration &+= 1
-        let refreshGeneration = self.sessionBranchesRefreshGeneration
         self.isLoadingSessionBranches = true
+        return self.sessionBranchesRefreshGeneration
+    }
+
+    private func performSessionBranchesRefresh(
+        for session: SessionSnapshot,
+        refreshGeneration: UInt64,
+        previousState: OpenClawChatOutboxBranchState?,
+        confirmingBranchChange: Bool) async -> Bool
+    {
+        let connectionGeneration = self.outboxBranchConnectionGeneration
         defer {
             if self.isCurrentSession(session),
                refreshGeneration == self.sessionBranchesRefreshGeneration
@@ -410,16 +441,23 @@ extension OpenClawChatViewModel {
             }
         }
         do {
-            let response = try await self.transport.listSessionBranches(sessionKey: session.key)
+            let response = try await self.transport.listSessionBranches(
+                sessionKey: session.key,
+                agentID: self.outboxAgentID(for: session))
             guard self.isCurrentSession(session),
-                  refreshGeneration == self.sessionBranchesRefreshGeneration
+                  refreshGeneration == self.sessionBranchesRefreshGeneration,
+                  connectionGeneration == self.outboxBranchConnectionGeneration
             else { return false }
             let outboxReconciled = if confirmingBranchChange,
                                       let activeLeafEntryID = Self.activeBranchLeafEntryID(in: response.branches)
             {
                 await self.confirmOutboxBranchChange(session, activeLeafEntryID: activeLeafEntryID)
             } else {
-                await self.reconcileOutboxBranchScope(session, branches: response.branches)
+                await self.reconcileOutboxBranchScope(
+                    session,
+                    branches: response.branches,
+                    previousState: previousState,
+                    connectionGeneration: connectionGeneration)
             }
             guard outboxReconciled,
                   self.isCurrentSession(session),
@@ -433,7 +471,8 @@ extension OpenClawChatViewModel {
             return true
         } catch {
             guard self.isCurrentSession(session),
-                  refreshGeneration == self.sessionBranchesRefreshGeneration
+                  refreshGeneration == self.sessionBranchesRefreshGeneration,
+                  connectionGeneration == self.outboxBranchConnectionGeneration
             else { return false }
             chatSessionActionsLogger.debug(
                 "sessions.branches.list failed \(error.localizedDescription, privacy: .public)")

@@ -1405,6 +1405,37 @@ struct ChatCommandOutboxStoreTests {
         #expect(await storeB.loadCommands().map(\.status) == [.queued])
     }
 
+    @Test func `transcript leaf updates never roll back concurrent branch epochs`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let branchStore = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let transcriptStore = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "agent-a")
+        #expect(await branchStore.updateLastActiveLeafEntryID("leaf-0", for: scope))
+        #expect(await transcriptStore.updateLastActiveLeafEntryID("tip-0", for: scope))
+
+        for epoch in 1...50 {
+            async let branchChange = branchStore.confirmBranchChange(
+                scope,
+                activeLeafEntryID: "leaf-\(epoch)",
+                lastError: "branch changed")
+            async let transcriptUpdate = transcriptStore.updateLastActiveLeafEntryID(
+                "tip-\(epoch)",
+                for: scope)
+            let (branchResult, transcriptResult) = await (branchChange, transcriptUpdate)
+            if branchResult == nil {
+                #expect(await branchStore.confirmBranchChange(
+                    scope,
+                    activeLeafEntryID: "leaf-\(epoch)",
+                    lastError: "branch changed") != nil)
+            }
+            if !transcriptResult {
+                #expect(await transcriptStore.updateLastActiveLeafEntryID("tip-\(epoch)", for: scope))
+            }
+            #expect(await branchStore.branchState(for: scope)?.epoch == epoch)
+        }
+    }
+
     @Test func `branch parking wins over a retry captured from the previous failure`() async throws {
         let url = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

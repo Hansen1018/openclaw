@@ -439,7 +439,9 @@ public protocol OpenClawChatTransport: Sendable {
     func forkSessionAtMessage(
         sessionKey: String,
         entryId: String) async throws -> OpenClawChatForkAtMessageResponse
-    func listSessionBranches(sessionKey: String) async throws -> OpenClawChatSessionBranchesResponse
+    func listSessionBranches(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatSessionBranchesResponse
     func switchSessionBranch(sessionKey: String, leafEntryId: String) async throws
     func setSessionModel(sessionKey: String, model: String?) async throws
     func patchSessionModel(
@@ -770,7 +772,10 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "sessions.fork not supported by this transport"])
     }
 
-    public func listSessionBranches(sessionKey _: String) async throws -> OpenClawChatSessionBranchesResponse {
+    public func listSessionBranches(
+        sessionKey _: String,
+        agentID _: String?) async throws -> OpenClawChatSessionBranchesResponse
+    {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,

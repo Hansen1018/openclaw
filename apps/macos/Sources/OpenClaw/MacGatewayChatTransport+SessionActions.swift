@@ -166,8 +166,11 @@ extension MacGatewayChatTransport {
         return try JSONDecoder().decode(OpenClawChatForkAtMessageResponse.self, from: data)
     }
 
-    func listSessionBranches(sessionKey: String) async throws -> OpenClawChatSessionBranchesResponse {
-        let target = self.sessionTarget(for: sessionKey)
+    func listSessionBranches(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatSessionBranchesResponse
+    {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
         let request = OpenClawChatGatewayRequests.listSessionBranches(
             sessionKey: target.sessionKey,
             agentID: target.agentID)

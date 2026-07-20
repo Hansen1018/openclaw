@@ -91,6 +91,23 @@ public struct OpenClawChatOutboxScope: Hashable, Sendable {
     }
 }
 
+/// Persisted branch ownership captured before bootstrap can advance the transcript tip.
+public struct OpenClawChatOutboxBranchState: Equatable, Sendable {
+    public let epoch: Int
+    public let lastActiveLeafEntryID: String?
+    public let hadPendingCommands: Bool
+
+    public init(
+        epoch: Int,
+        lastActiveLeafEntryID: String?,
+        hadPendingCommands: Bool = false)
+    {
+        self.epoch = epoch
+        self.lastActiveLeafEntryID = lastActiveLeafEntryID
+        self.hadPendingCommands = hadPendingCommands
+    }
+}
+
 /// One attachment captured with a durable chat command.
 public struct OpenClawChatOutboxAttachment: Codable, Hashable, Sendable {
     public let type: String
@@ -257,9 +274,12 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         attemptVersion: Int,
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
+    /// Captures the persisted scope state before bootstrap history can advance its tip.
+    func branchState(for scope: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState?
     /// Reconciles a bootstrap branch snapshot before automatic replay is enabled.
     func reconcileBranchScope(
         _ scope: OpenClawChatOutboxScope,
+        previousState: OpenClawChatOutboxBranchState,
         activeLeafEntryID: String,
         branchLeafEntryIDs: Set<String>,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
@@ -294,8 +314,13 @@ public protocol OpenClawChatCommandOutbox: Sendable {
 }
 
 extension OpenClawChatCommandOutbox {
+    public func branchState(for _: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState? {
+        nil
+    }
+
     public func reconcileBranchScope(
         _: OpenClawChatOutboxScope,
+        previousState _: OpenClawChatOutboxBranchState,
         activeLeafEntryID _: String,
         branchLeafEntryIDs _: Set<String>,
         lastError _: String) async -> [OpenClawChatOutboxCommand]?

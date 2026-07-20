@@ -81,12 +81,15 @@ private actor OutboxTransportState {
     var sessionListFails = false
     var branchListFails = false
     var branchListRequestCount = 0
+    var branchListRequests: [(sessionKey: String, agentID: String?)] = []
     var historyRequestCount = 0
     var heldSendGate: DeleteGate?
     var commandListGate: DeleteGate?
     let commandListStarted = DeleteGate()
     var sessionListGate: DeleteGate?
     let sessionListStarted = DeleteGate()
+    var branchListGate: DeleteGate?
+    let branchListStarted = DeleteGate()
     var staleHistoryRows: [AnyCodable]?
 
     func setHeldSendGate(_ gate: DeleteGate?) {
@@ -119,6 +122,21 @@ private actor OutboxTransportState {
         }
     }
 
+    func setBranchListGate(_ gate: DeleteGate?) {
+        self.branchListGate = gate
+    }
+
+    func waitUntilBranchListStarted() async {
+        await self.branchListStarted.wait()
+    }
+
+    func awaitBranchListGate() async {
+        await self.branchListStarted.open()
+        if let branchListGate {
+            await branchListGate.wait()
+        }
+    }
+
     func setStaleHistoryRows(_ rows: [AnyCodable]?) {
         self.staleHistoryRows = rows
     }
@@ -148,8 +166,9 @@ private actor OutboxTransportState {
         self.branchListFails = fails
     }
 
-    func recordBranchListRequest() {
+    func recordBranchListRequest(sessionKey: String, agentID: String?) {
         self.branchListRequestCount += 1
+        self.branchListRequests.append((sessionKey, agentID))
     }
 
     func recordHistoryRequest(agentID: String?) {
@@ -463,8 +482,12 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
         await self.state.healthy
     }
 
-    func listSessionBranches(sessionKey _: String) async throws -> OpenClawChatSessionBranchesResponse {
-        await self.state.recordBranchListRequest()
+    func listSessionBranches(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatSessionBranchesResponse
+    {
+        await self.state.recordBranchListRequest(sessionKey: sessionKey, agentID: agentID)
+        await self.state.awaitBranchListGate()
         if !self.supportsBranchListing {
             throw GatewayResponseError(
                 method: "sessions.branches.list",
@@ -562,14 +585,20 @@ private protocol BranchScopeForwardingOutbox: OpenClawChatCommandOutbox {
 }
 
 extension BranchScopeForwardingOutbox {
+    func branchState(for scope: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState? {
+        await self.branchStateBase.branchState(for: scope)
+    }
+
     func reconcileBranchScope(
         _ scope: OpenClawChatOutboxScope,
+        previousState: OpenClawChatOutboxBranchState,
         activeLeafEntryID: String,
         branchLeafEntryIDs: Set<String>,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
     {
         await self.branchStateBase.reconcileBranchScope(
             scope,
+            previousState: previousState,
             activeLeafEntryID: activeLeafEntryID,
             branchLeafEntryIDs: branchLeafEntryIDs,
             lastError: lastError)
@@ -734,14 +763,20 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
             lastError: lastError)
     }
 
+    func branchState(for scope: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState? {
+        await self.base.branchState(for: scope)
+    }
+
     func reconcileBranchScope(
         _ scope: OpenClawChatOutboxScope,
+        previousState: OpenClawChatOutboxBranchState,
         activeLeafEntryID: String,
         branchLeafEntryIDs: Set<String>,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
     {
         await self.base.reconcileBranchScope(
             scope,
+            previousState: previousState,
             activeLeafEntryID: activeLeafEntryID,
             branchLeafEntryIDs: branchLeafEntryIDs,
             lastError: lastError)
@@ -1200,6 +1235,152 @@ struct ChatViewModelOutboxTests {
             await transport.state.sentMessages == ["offline-safe"]
         }
         #expect(await transport.state.branchListRequestCount == branchListCount)
+    }
+
+    @Test func `reconnect invalidates branch reconciliation and reconciles again`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-new", for: scope))
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "reconnect-scope",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "wait for reconnect",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run {
+            vm.healthOK = true
+            vm.readySessionMetadataGeneration = vm.sessionMetadataGeneration
+            vm.isFlushingOutbox = true
+            vm.reconcilePendingOutboxBranchScopes()
+        }
+        try await waitUntil("initial scope reconciliation") {
+            await MainActor.run { vm.reconciledOutboxBranchScopes.contains(scope) }
+        }
+        let initialRequestCount = await transport.state.branchListRequestCount
+
+        await MainActor.run {
+            vm.applyTransportHealth(false)
+            vm.readySessionMetadataGeneration = vm.sessionMetadataGeneration
+        }
+        #expect(await MainActor.run { vm.reconciledOutboxBranchScopes.isEmpty })
+        await transport.state.setHealthy(true)
+        await MainActor.run { vm.applyTransportHealth(true) }
+
+        try await waitUntil("reconnect scope reconciliation") {
+            let requestCount = await transport.state.branchListRequestCount
+            let reconciled = await MainActor.run { vm.reconciledOutboxBranchScopes.contains(scope) }
+            return requestCount > initialRequestCount && reconciled
+        }
+    }
+
+    @Test func `bootstrap reconciles against leaf captured before history advances tip`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-active", for: scope))
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "closed-app-switch",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "belongs to the old branch",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        let transport = OutboxTestTransport(healthy: true, activeBranchLeafEntryID: "leaf-new")
+        let branchListGate = DeleteGate()
+        await transport.state.setBranchListGate(branchListGate)
+        await transport.state.setStaleHistoryRows([AnyCodable([
+            "role": "assistant",
+            "content": [["type": "text", "text": "new branch"]],
+            "timestamp": 1.0,
+            "__openclaw": ["id": "leaf-new"],
+        ] as [String: Any])])
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run { vm.load() }
+
+        await transport.state.waitUntilBranchListStarted()
+        try await waitUntil("history advances persisted leaf while branch list is held") {
+            await store.branchState(for: scope)?.lastActiveLeafEntryID == "leaf-new"
+        }
+        await branchListGate.open()
+
+        try await waitUntil("captured old leaf confirms branch switch") {
+            let state = await store.branchState(for: scope)
+            let status = await store.loadCommands().first?.status
+            return state?.epoch == 1 && status == .failed
+        }
+    }
+
+    @Test func `background branch reconciliation routes and parks by command agent`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let alphaScope = OpenClawChatOutboxScope(sessionKey: "global", agentID: "alpha")
+        let betaScope = OpenClawChatOutboxScope(sessionKey: "global", agentID: "beta")
+        let now = Date().timeIntervalSince1970
+        #expect(await store.updateLastActiveLeafEntryID("leaf-active", for: alphaScope))
+        #expect(await store.updateLastActiveLeafEntryID("leaf-new", for: betaScope))
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "alpha-command",
+            sessionKey: "global",
+            deliverySessionKey: "agent:alpha:main",
+            routingContract: "per-sender|main|alpha",
+            agentID: "alpha",
+            text: "park alpha",
+            thinking: "off",
+            createdAt: now,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "beta-command",
+            sessionKey: "global",
+            deliverySessionKey: "agent:beta:main",
+            routingContract: "per-sender|main|beta",
+            agentID: "beta",
+            text: "keep beta",
+            thinking: "off",
+            createdAt: now + 1,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        let transport = OutboxTestTransport(healthy: true, activeBranchLeafEntryID: "leaf-new")
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run {
+            vm.healthOK = true
+            vm.readySessionMetadataGeneration = vm.sessionMetadataGeneration
+            vm.isFlushingOutbox = true
+            vm.reconcilePendingOutboxBranchScopes()
+        }
+
+        try await waitUntil("both agent scopes reconcile") {
+            await transport.state.branchListRequests.count >= 2
+        }
+        let requests = await transport.state.branchListRequests
+        #expect(Set(requests.map { "\($0.sessionKey)|\($0.agentID ?? "")" }) == [
+            "agent:alpha:main|alpha",
+            "agent:beta:main|beta",
+        ])
+        let statuses = await Dictionary(
+            uniqueKeysWithValues: store.loadCommands().map { ($0.id, $0.status) })
+        #expect(statuses == ["alpha-command": .failed, "beta-command": .queued])
+        #expect(await store.branchState(for: alphaScope)?.epoch == 1)
+        #expect(await store.branchState(for: betaScope)?.epoch == 0)
     }
 
     @Test func `ambiguous bootstrap parks pending rows fail closed`() async throws {

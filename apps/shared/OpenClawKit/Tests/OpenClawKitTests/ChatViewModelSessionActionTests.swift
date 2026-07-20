@@ -197,7 +197,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
             editorText: self.forkAtMessageEditorText)
     }
 
-    func listSessionBranches(sessionKey: String) async throws -> OpenClawChatSessionBranchesResponse {
+    func listSessionBranches(
+        sessionKey: String,
+        agentID _: String?) async throws -> OpenClawChatSessionBranchesResponse
+    {
         let callIndex = await self.state.recordBranchList(sessionKey)
         if self.branchListGates.indices.contains(callIndex) {
             await self.branchListGates[callIndex].suspendCompletion()
