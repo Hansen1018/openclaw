@@ -231,6 +231,7 @@ public enum OpenClawChatOutboxUpdateResult: Equatable, Sendable {
 public enum OpenClawChatOutboxChange: Equatable, Sendable {
     case canceled(id: String)
     case confirmed(id: String)
+    case invalidated(scope: OpenClawChatOutboxScope)
 }
 
 /// Durable offline outbox for chat commands, scoped to one gateway identity
@@ -277,10 +278,11 @@ public protocol OpenClawChatCommandOutbox: Sendable {
     /// Captures the persisted scope state before bootstrap history can advance its tip.
     func branchState(for scope: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState?
     /// Reconciles a bootstrap branch snapshot before automatic replay is enabled.
+    /// A nil active leaf represents a successfully listed empty transcript.
     func reconcileBranchScope(
         _ scope: OpenClawChatOutboxScope,
         previousState: OpenClawChatOutboxBranchState,
-        activeLeafEntryID: String,
+        activeLeafEntryID: String?,
         branchLeafEntryIDs: Set<String>,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
     /// Atomically records a confirmed server-side branch change and parks rows
@@ -321,7 +323,7 @@ extension OpenClawChatCommandOutbox {
     public func reconcileBranchScope(
         _: OpenClawChatOutboxScope,
         previousState _: OpenClawChatOutboxBranchState,
-        activeLeafEntryID _: String,
+        activeLeafEntryID _: String?,
         branchLeafEntryIDs _: Set<String>,
         lastError _: String) async -> [OpenClawChatOutboxCommand]?
     {

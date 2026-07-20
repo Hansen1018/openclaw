@@ -168,7 +168,13 @@ extension OpenClawChatViewModel {
         previousState: OpenClawChatOutboxBranchState,
         outbox: any OpenClawChatCommandOutbox) async -> [OpenClawChatOutboxCommand]?
     {
-        guard let activeLeafEntryID = Self.activeBranchLeafEntryID(in: branches) else { return nil }
+        let activeLeafEntryID: String?
+        if branches.isEmpty {
+            activeLeafEntryID = nil
+        } else {
+            guard let active = Self.activeBranchLeafEntryID(in: branches) else { return nil }
+            activeLeafEntryID = active
+        }
         let branchLeafEntryIDs = Set(branches.compactMap { branch -> String? in
             let leaf = branch.leafEntryId.trimmingCharacters(in: .whitespacesAndNewlines)
             return leaf.isEmpty ? nil : leaf
@@ -1329,6 +1335,10 @@ extension OpenClawChatViewModel {
             // Canonical history owns the message row; only its outbox badge
             // and command mapping disappear.
             self.clearOutboxState(forCommandID: commandID)
+        case let .invalidated(scope):
+            let session = self.currentSessionSnapshot()
+            guard self.outboxBranchScope(for: session) == scope else { return }
+            self.restoreOutboxMessages(session: session)
         }
     }
 

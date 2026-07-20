@@ -755,16 +755,19 @@ extension OpenClawChatSQLiteTranscriptCache {
     public func reconcileBranchScope(
         _ scope: OpenClawChatOutboxScope,
         previousState: OpenClawChatOutboxBranchState,
-        activeLeafEntryID: String,
+        activeLeafEntryID: String?,
         branchLeafEntryIDs: Set<String>,
         lastError: String) async -> [OpenClawChatOutboxCommand]?
     {
+        let normalizedActiveLeafEntryID = Self.normalizedLeafEntryID(activeLeafEntryID)
         guard !self.isRetired,
-              let activeLeafEntryID = Self.normalizedLeafEntryID(activeLeafEntryID),
+              activeLeafEntryID == nil || normalizedActiveLeafEntryID != nil,
               let db = await handle(),
               self.execute(db, sql: "BEGIN IMMEDIATE", bindings: [])
         else { return nil }
+        let activeLeafEntryID = normalizedActiveLeafEntryID
         var committed = false
+        var invalidatesOutbox = false
         defer {
             if !committed { _ = self.execute(db, sql: "ROLLBACK", bindings: []) }
         }
@@ -773,7 +776,8 @@ extension OpenClawChatSQLiteTranscriptCache {
               state.epoch == previousState.epoch
         else { return nil }
 
-        if let lastLeaf = previousState.lastActiveLeafEntryID,
+        if let activeLeafEntryID,
+           let lastLeaf = previousState.lastActiveLeafEntryID,
            lastLeaf != activeLeafEntryID,
            branchLeafEntryIDs.contains(lastLeaf)
         {
@@ -784,13 +788,15 @@ extension OpenClawChatSQLiteTranscriptCache {
                 activeLeafEntryID: activeLeafEntryID,
                 lastError: lastError)
             else { return nil }
+            invalidatesOutbox = true
         } else {
             if previousState.lastActiveLeafEntryID != activeLeafEntryID,
-               previousState.hadPendingCommands
+               previousState.hadPendingCommands || activeLeafEntryID == nil
             {
                 // A crash after a transcript append can make the tip ambiguous.
                 // Requiring one manual retry is preferable to silent wrong-branch delivery.
                 guard self.parkPendingCommands(db, scope: scope, lastError: lastError) else { return nil }
+                invalidatesOutbox = true
             }
             guard self.writeBranchState(
                 db,
@@ -801,7 +807,11 @@ extension OpenClawChatSQLiteTranscriptCache {
         }
         guard let commands = self.readCommands(db) else { return nil }
         committed = self.execute(db, sql: "COMMIT", bindings: [])
-        return committed ? commands : nil
+        guard committed else { return nil }
+        if invalidatesOutbox {
+            self.emitOutboxChange(.invalidated(scope: scope))
+        }
+        return commands
     }
 
     public func confirmBranchChange(
@@ -830,7 +840,9 @@ extension OpenClawChatSQLiteTranscriptCache {
         else { return nil }
         guard let commands = self.readCommands(db) else { return nil }
         committed = self.execute(db, sql: "COMMIT", bindings: [])
-        return committed ? commands : nil
+        guard committed else { return nil }
+        self.emitOutboxChange(.invalidated(scope: scope))
+        return commands
     }
 
     public func updateLastActiveLeafEntryID(
@@ -894,9 +906,18 @@ extension OpenClawChatSQLiteTranscriptCache {
         _ db: OpaquePointer,
         scope: OpenClawChatOutboxScope,
         epoch: Int,
-        lastActiveLeafEntryID: String) -> Bool
+        lastActiveLeafEntryID: String?) -> Bool
     {
-        self.execute(
+        guard let lastActiveLeafEntryID else {
+            return self.execute(
+                db,
+                sql: """
+                UPDATE outbox_branch_scopes SET branch_epoch = ?4, last_active_leaf_id = NULL
+                WHERE gateway_id = ?1 AND session_key = ?2 AND agent_id = ?3
+                """,
+                bindings: self.scopeBindings(scope) + [epoch])
+        }
+        return self.execute(
             db,
             sql: """
             UPDATE outbox_branch_scopes SET branch_epoch = ?4, last_active_leaf_id = ?5
