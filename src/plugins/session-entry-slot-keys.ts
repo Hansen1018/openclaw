@@ -24,6 +24,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "lastActivityAt",
   "sessionFile",
   "spawnedBy",
+  "completionOwnerSessionKey",
   "spawnedWorkspaceDir",
   "spawnedCwd",
   "worktree",
