@@ -25,6 +25,7 @@ const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
   exports: {
     ".": { import: "./dist/index.mjs" },
     "./providers": { import: "./dist/providers.mjs" },
+    "./transports": { import: "./dist/transports.mjs" },
     "./internal/*": { import: "./dist/internal/*.mjs" },
   },
 });
@@ -650,6 +651,7 @@ describe("check-openclaw-package-tarball", () => {
         "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
         "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/transports.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
       (tarball) => {
@@ -679,6 +681,7 @@ describe("check-openclaw-package-tarball", () => {
         "dist/index.js": "export {};\n",
         "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
         "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/transports.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
       (tarball) => {
@@ -719,6 +722,7 @@ describe("check-openclaw-package-tarball", () => {
         }),
         "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/transports.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
       (tarball) => {
