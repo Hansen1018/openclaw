@@ -344,6 +344,8 @@ import {
   TerminalUploadParamsSchema,
   TerminalUploadResultSchema,
   UiCommandParamsSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -855,6 +857,8 @@ export const validateChannelsStatusParams = lazyCompile(ChannelsStatusParamsSche
 export const validateChannelsStartParams = lazyCompile(ChannelsStartParamsSchema);
 export const validateChannelsStopParams = lazyCompile(ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = lazyCompile(ChannelsLogoutParamsSchema);
+export const validateModelsAuthLogoutParams = lazyCompile(ModelsAuthLogoutParamsSchema);
+export const validateModelsAuthStatusParams = lazyCompile(ModelsAuthStatusParamsSchema);
 export const validateModelsListParams = lazyCompile(ModelsListParamsSchema);
 export const validateSkillsStatusParams = lazyCompile(SkillsStatusParamsSchema);
 export const validateToolsCatalogParams = lazyCompile(ToolsCatalogParamsSchema);
@@ -1313,6 +1317,8 @@ export {
   PluginsUiDescriptorsResultSchema,
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
