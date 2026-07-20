@@ -1,5 +1,9 @@
 // Signal plugin module implements setup core behavior.
-import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import {
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+  resolveAccountEntry,
+} from "openclaw/plugin-sdk/account-resolution";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import {
   createCliPathTextInput,
@@ -72,13 +76,8 @@ function parseSignalTransportSelections(value: unknown): ExplicitSignalTransport
   const selections: ExplicitSignalTransportSelection[] = [];
   const accountIds = new Set<string>();
   for (const [rawAccountId, rawSelection] of Object.entries(parsed)) {
-    const accountId = normalizeAccountId(rawAccountId);
-    if (
-      !rawAccountId.trim() ||
-      accountId === "__proto__" ||
-      accountId === "prototype" ||
-      accountId === "constructor"
-    ) {
+    const accountId = normalizeOptionalAccountId(rawAccountId);
+    if (!accountId) {
       throw new Error(`Signal --signal-transports has an invalid account id: ${rawAccountId}`);
     }
     if (accountIds.has(accountId)) {

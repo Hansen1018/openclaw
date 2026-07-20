@@ -507,6 +507,23 @@ describe("signalSetupAdapter", () => {
     ).toBe('Signal transport selection for account "work" must use external-native or container.');
   });
 
+  it.each(["__proto__", "constructor", "!!!"])(
+    "rejects invalid recovery-map account id %s instead of selecting the default account",
+    (accountId) => {
+      expect(
+        signalSetupAdapter.validateInput?.({
+          cfg: {},
+          accountId: "default",
+          input: {
+            signalTransports: JSON.stringify({
+              [accountId]: { kind: "container", url: "http://signal:8080" },
+            }),
+          },
+        }),
+      ).toBe(`Signal --signal-transports has an invalid account id: ${accountId}`);
+    },
+  );
+
   it("atomically recovers every legacy account from an explicit transport selection", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {
